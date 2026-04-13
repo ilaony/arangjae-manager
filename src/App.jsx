@@ -108,7 +108,7 @@ export default function App() {
         <div style={styles.headerInner}>
           <div style={styles.logoArea}>
             <div style={styles.logoIcon}>🏠</div>
-            <h1 style={styles.logoText}>호스텔 매니저</h1>
+            <h1 style={styles.logoText}>아랑재</h1>
           </div>
           <nav style={styles.tabNav}>
             <button
