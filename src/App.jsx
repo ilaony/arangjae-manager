@@ -107,7 +107,7 @@ export default function App() {
       <header style={styles.header}>
         <div style={styles.headerInner}>
           <div style={styles.logoArea}>
-            <div style={styles.logoIcon}>🏠</div>
+            <img src="/src/arangjae_logo.jpeg" alt="아랑재 로고" style={styles.logoIcon} />
             <h1 style={styles.logoText}>아랑재</h1>
           </div>
           <nav style={styles.tabNav}>
@@ -963,7 +963,7 @@ const styles = {
     height: 60,
   },
   logoArea: { display: "flex", alignItems: "center", gap: 10 },
-  logoIcon: { fontSize: 26 },
+  logoIcon: { height: 32, borderRadius: 6, objectFit: 'contain' },
   logoText: {
     fontSize: 20, fontWeight: 800, margin: 0,
     background: "linear-gradient(135deg, #2563EB, #7C3AED)",
