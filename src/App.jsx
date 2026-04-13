@@ -1021,10 +1021,10 @@ const styles = {
   weekdayRow: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", padding: "0 12px", gap: 2 },
   weekdayCell: { textAlign: "center", fontSize: 12, fontWeight: 700, padding: "6px 0" },
   daysGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", padding: "4px 12px 16px", gap: 2 },
-  emptyCell: { minHeight: 64 },
+  emptyCell: { height: 64 },
   dayCell: {
-    minHeight: 64, padding: "4px 4px 2px", borderRadius: 8,
-    position: "relative", transition: "background 0.15s", cursor: "default",
+    height: 64, padding: "4px 4px 2px", borderRadius: 8,
+    position: "relative", transition: "background 0.15s", cursor: "default", overflow: "hidden",
   },
   todayCell: { background: "#EFF6FF" },
   dayNum: { fontSize: 13, fontWeight: 600, display: "inline-block", padding: "1px 4px" },
