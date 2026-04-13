@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useBookings, useCleaning } from "./useFirestore";
+import arangjaeLogo from "./assets/arangjae_logo.jpeg";
 
 // ─── Constants ───
 const PROPERTIES = [
@@ -107,7 +108,7 @@ export default function App() {
       <header style={styles.header}>
         <div style={styles.headerInner}>
           <div style={styles.logoArea}>
-            <img src="/src/arangjae_logo.jpeg" alt="아랑재 로고" style={styles.logoIcon} />
+            <img src={arangjaeLogo} alt="아랑재 로고" style={styles.logoIcon} />
             <h1 style={styles.logoText}>아랑재</h1>
           </div>
           <nav style={styles.tabNav}>
