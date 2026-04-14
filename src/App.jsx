@@ -305,6 +305,7 @@ function PropertyCalendar({
   const today = new Date();
   const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
 
+  // bookingMap for cleaning tab (per-day lookup)
   const bookingMap = {};
   bookings.forEach((b) => {
     const start = new Date(b.checkIn);
@@ -322,6 +323,60 @@ function PropertyCalendar({
   const cells = [];
   for (let i = 0; i < firstDay; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  // --- Booking segments & lane assignment for spanning bars ---
+  const laneMap = {};
+  const segments = [];
+  if (tab === "booking") {
+    // Assign lanes (vertical slots) so overlapping bookings don't collide
+    const sorted = [...bookings].sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+    const laneEnds = [];
+    sorted.forEach((b) => {
+      let lane = -1;
+      for (let i = 0; i < laneEnds.length; i++) {
+        if (b.checkIn >= laneEnds[i]) { lane = i; break; }
+      }
+      if (lane === -1) { lane = laneEnds.length; laneEnds.push(null); }
+      laneEnds[lane] = b.checkOut;
+      laneMap[b.id] = lane;
+    });
+
+    // Build segments: one per week-row per booking
+    const monthStart = new Date(year, month, 1);
+    const monthEnd = new Date(year, month, daysInMonth);
+    bookings.forEach((b) => {
+      const checkIn = new Date(b.checkIn);
+      const checkOut = new Date(b.checkOut);
+      const visStart = checkIn < monthStart ? monthStart : checkIn;
+      const lastDay = new Date(checkOut);
+      lastDay.setDate(lastDay.getDate() - 1);
+      const visEnd = lastDay > monthEnd ? monthEnd : lastDay;
+      if (visStart > monthEnd || visEnd < monthStart) return;
+
+      const startDay = visStart.getDate();
+      const endDay = visEnd.getDate();
+      for (let d = startDay; d <= endDay; ) {
+        const cellIdx = firstDay + d - 1;
+        const row = Math.floor(cellIdx / 7) + 1;
+        const col = (cellIdx % 7) + 1;
+        const remainWeek = 7 - col + 1;
+        const remainBook = endDay - d + 1;
+        const span = Math.min(remainWeek, remainBook);
+        const isFirst = (d === startDay) && (checkIn >= monthStart);
+        const isLast = (d + span - 1 === endDay) && (lastDay <= monthEnd);
+
+        segments.push({
+          booking: b,
+          row, startCol: col, span,
+          isFirst, isLast,
+          lane: laneMap[b.id] || 0,
+        });
+        d += span;
+      }
+    });
+  }
+
+  const totalRows = Math.ceil(cells.length / 7);
 
   return (
     <div style={{ ...styles.calendarCard, borderTop: `3px solid ${property.color}` }}>
@@ -342,13 +397,20 @@ function PropertyCalendar({
         ))}
       </div>
 
-      <div style={styles.daysGrid}>
+      <div style={{
+        ...styles.daysGrid,
+        gridTemplateRows: `repeat(${totalRows}, 64px)`,
+      }}>
+        {/* Day cells */}
         {cells.map((day, idx) => {
-          if (day === null) return <div key={`e-${idx}`} style={styles.emptyCell} />;
+          const row = Math.floor(idx / 7) + 1;
+          const col = (idx % 7) + 1;
+          if (day === null) return (
+            <div key={`e-${idx}`} style={{ ...styles.emptyCell, gridRow: row, gridColumn: col }} />
+          );
           const dateStr = toDateStr(year, month, day);
           const isToday = dateStr === todayStr;
           const dayOfWeek = (firstDay + day - 1) % 7;
-          const booksOnDay = bookingMap[dateStr] || [];
           const cleanEntry = cleanMap[dateStr] || null;
           const cleanStatus = cleanEntry ? cleanEntry.status || "none" : "none";
           const cleanerName = cleanEntry ? cleanEntry.cleaner || "" : "";
@@ -359,6 +421,7 @@ function PropertyCalendar({
               key={day}
               style={{
                 ...styles.dayCell,
+                gridRow: row, gridColumn: col,
                 ...(isToday ? styles.todayCell : {}),
                 ...(tab === "cleaning" && hasCleaning
                   ? { background: cleanerName ? "#EFF6FF" : "#FEF2F2" }
@@ -377,35 +440,6 @@ function PropertyCalendar({
               >
                 {day}
               </span>
-
-              {tab === "booking" && booksOnDay.length > 0 && (
-                <div style={styles.bookingIndicators}>
-                  {booksOnDay.slice(0, 2).map((b) => {
-                    const ch = CHANNEL_MAP[b.channel];
-                    const isCheckIn = b.checkIn === dateStr;
-                    return (
-                      <div
-                        key={b.id}
-                        onClick={(e) => { e.stopPropagation(); onClickBooking(b.id); }}
-                        style={{
-                          ...styles.bookingTag,
-                          background: ch ? ch.color : "#94A3B8",
-                          borderRadius: isCheckIn ? "8px 2px 2px 8px" : "2px 2px 2px 2px",
-                          cursor: "pointer",
-                        }}
-                        title={`${b.guestName} (${ch ? ch.name : ""})`}
-                      >
-                        <span style={styles.bookingTagText}>
-                          {isCheckIn ? "▶ " : ""}{b.guestName}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  {booksOnDay.length > 2 && (
-                    <div style={styles.moreTag}>+{booksOnDay.length - 2}</div>
-                  )}
-                </div>
-              )}
 
               {tab === "cleaning" && hasCleaning && (() => {
                 const nextBk = bookings
@@ -432,6 +466,40 @@ function PropertyCalendar({
                   </div>
                 );
               })()}
+            </div>
+          );
+        })}
+
+        {/* Booking spanning bars */}
+        {tab === "booking" && segments.map((seg, i) => {
+          const ch = CHANNEL_MAP[seg.booking.channel];
+          const color = ch ? ch.color : "#94A3B8";
+          const radiusL = seg.isFirst ? 6 : 0;
+          const radiusR = seg.isLast ? 6 : 0;
+          return (
+            <div
+              key={`seg-${i}`}
+              onClick={() => onClickBooking(seg.booking.id)}
+              style={{
+                gridRow: seg.row,
+                gridColumn: `${seg.startCol} / ${seg.startCol + seg.span}`,
+                alignSelf: "start",
+                marginTop: 22 + seg.lane * 18,
+                height: 16,
+                background: color,
+                borderRadius: `${radiusL}px ${radiusR}px ${radiusR}px ${radiusL}px`,
+                cursor: "pointer",
+                overflow: "hidden",
+                padding: "0 4px",
+                zIndex: 1,
+                display: "flex",
+                alignItems: "center",
+              }}
+              title={`${seg.booking.guestName} (${ch ? ch.name : ""})`}
+            >
+              <span style={styles.bookingTagText}>
+                {seg.isFirst ? "▶ " : ""}{seg.booking.guestName}
+              </span>
             </div>
           );
         })}
@@ -1029,13 +1097,10 @@ const styles = {
   todayCell: { background: "#EFF6FF" },
   dayNum: { fontSize: 13, fontWeight: 600, display: "inline-block", padding: "1px 4px" },
   todayNum: { background: "#2563EB", color: "#FFF", borderRadius: 6, padding: "1px 6px" },
-  bookingIndicators: { display: "flex", flexDirection: "column", gap: 2, marginTop: 2 },
-  bookingTag: { padding: "2px 5px", overflow: "hidden" },
   bookingTagText: {
     fontSize: 10, color: "#FFF", fontWeight: 600,
     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block",
   },
-  moreTag: { fontSize: 10, color: "#94A3B8", textAlign: "center", fontWeight: 600 },
   cleanIndicators: { display: "flex", flexDirection: "column", gap: 2, marginTop: 2 },
   cleanTag: { padding: "2px 5px", borderRadius: 4, overflow: "hidden" },
   cleanTagText: {
