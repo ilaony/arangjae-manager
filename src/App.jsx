@@ -47,6 +47,57 @@ function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "0";
+  ta.style.left = "0";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
+
+function buildCleaningScheduleText(property, year, month, cleaningData, bookings) {
+  const shortName = property.name.split(" ").pop();
+  const title = `${year}년 ${month + 1}월 청소일정 - ${shortName}`;
+  const prefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
+  const entries = cleaningData
+    .filter((c) => c.date && c.date.startsWith(prefix) && c.status && c.status !== "none")
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const lines = entries.map((c) => {
+    const day = parseInt(c.date.slice(-2), 10);
+    const checkoutBk = bookings.find((b) => b.checkOut === c.date);
+    const nextBk = bookings
+      .filter((b) => b.checkIn >= c.date)
+      .sort((x, y) => x.checkIn.localeCompare(y.checkIn))[0];
+
+    const parts = [];
+    parts.push(nextBk ? `${nextBk.guests}인 세팅` : "세팅 미정");
+    if (checkoutBk && checkoutBk.luggageAfter) parts.push("체크아웃 후 짐보관");
+    if (checkoutBk && checkoutBk.lateCheckOut) parts.push("레이트 체크아웃");
+    if (nextBk && nextBk.earlyCheckIn) parts.push("얼리 체크인");
+
+    return `${month + 1}월 ${day}일 ${parts.join(", ")}`;
+  });
+
+  return [title, ...lines].join("\n");
+}
+
 // ═══════════════════════════════════════
 //  Main App
 // ═══════════════════════════════════════
@@ -385,6 +436,18 @@ function PropertyCalendar({
         {tab === "booking" && (
           <button onClick={onAddBooking} style={{ ...styles.addBtn, background: property.color }}>
             + 예약 추가
+          </button>
+        )}
+        {tab === "cleaning" && (
+          <button
+            onClick={async () => {
+              const text = buildCleaningScheduleText(property, year, month, cleaningData, bookings);
+              const ok = await copyToClipboard(text);
+              alert(ok ? "청소일정을 클립보드에 복사했습니다." : "복사에 실패했습니다.");
+            }}
+            style={{ ...styles.addBtn, background: property.color }}
+          >
+            📋 복사
           </button>
         )}
       </div>
