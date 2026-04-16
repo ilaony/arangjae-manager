@@ -81,6 +81,7 @@ function buildCleaningScheduleText(property, year, month, cleaningData, bookings
 
   const lines = entries.map((c) => {
     const day = parseInt(c.date.slice(-2), 10);
+    const weekday = WEEKDAYS[new Date(year, month, day).getDay()] + "요일";
     const checkoutBk = bookings.find((b) => b.checkOut === c.date);
     const nextBk = bookings
       .filter((b) => b.checkIn >= c.date)
@@ -92,7 +93,7 @@ function buildCleaningScheduleText(property, year, month, cleaningData, bookings
     if (checkoutBk && checkoutBk.lateCheckOut) parts.push("레이트 체크아웃");
     if (nextBk && nextBk.earlyCheckIn) parts.push("얼리 체크인");
 
-    return `${month + 1}월 ${day}일 ${parts.join(", ")}`;
+    return `${month + 1}월 ${day}일 ${weekday} ${parts.join(", ")}`;
   });
 
   return [title, ...lines].join("\n");
