@@ -43,6 +43,10 @@ function getFirstDayOfWeek(year, month) {
 function toDateStr(y, m, d) {
   return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
+function parseDate(s) {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -360,8 +364,8 @@ function PropertyCalendar({
   // bookingMap for cleaning tab (per-day lookup)
   const bookingMap = {};
   bookings.forEach((b) => {
-    const start = new Date(b.checkIn);
-    const end = new Date(b.checkOut);
+    const start = parseDate(b.checkIn);
+    const end = parseDate(b.checkOut);
     for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
       const ds = toDateStr(d.getFullYear(), d.getMonth(), d.getDate());
       if (!bookingMap[ds]) bookingMap[ds] = [];
@@ -397,8 +401,8 @@ function PropertyCalendar({
     const monthStart = new Date(year, month, 1);
     const monthEnd = new Date(year, month, daysInMonth);
     bookings.forEach((b) => {
-      const checkIn = new Date(b.checkIn);
-      const checkOut = new Date(b.checkOut);
+      const checkIn = parseDate(b.checkIn);
+      const checkOut = parseDate(b.checkOut);
       const visStart = checkIn < monthStart ? monthStart : checkIn;
       const lastDay = new Date(checkOut);
       lastDay.setDate(lastDay.getDate() - 1);
@@ -600,8 +604,8 @@ function BookingModal({ property, bookings, editId, year, month, onClose, onSave
   const otherBookings = bookings.filter((b) => b.id !== editId);
   const occupiedDates = new Set();
   otherBookings.forEach((b) => {
-    const start = new Date(b.checkIn);
-    const end = new Date(b.checkOut);
+    const start = parseDate(b.checkIn);
+    const end = parseDate(b.checkOut);
     for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
       occupiedDates.add(toDateStr(d.getFullYear(), d.getMonth(), d.getDate()));
     }
