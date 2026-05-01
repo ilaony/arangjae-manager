@@ -843,7 +843,7 @@ function DetailModal({ property, booking, onClose, onEdit, onDelete }) {
   if (!booking) return null;
   const ch = CHANNEL_MAP[booking.channel];
   const nights = Math.round(
-    (new Date(booking.checkOut) - new Date(booking.checkIn)) / 86400000
+    (parseDate(booking.checkOut) - parseDate(booking.checkIn)) / 86400000
   );
 
   return (
