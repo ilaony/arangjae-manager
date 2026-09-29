@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { useBookings, useCleaning } from "./useFirestore";
+import {
+  useBookings,
+  useCleaning,
+  saveBookingWithCleaning,
+  deleteBookingWithCleaning,
+} from "./useFirestore";
 import arangjaeLogo from "./assets/arangjae_logo.jpeg";
 
 // ─── Constants ───
@@ -49,6 +54,10 @@ function parseDate(s) {
 }
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+function reportSyncError(err) {
+  console.error(err);
+  alert("저장에 실패했습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.");
 }
 
 async function copyToClipboard(text) {
@@ -131,7 +140,9 @@ export default function App() {
     "arangjae-maru": maruClean,
   };
 
-  const loaded = !daol.loading && !ara.loading && !maru.loading;
+  const loaded =
+    !daol.loading && !ara.loading && !maru.loading &&
+    !daolClean.loading && !araClean.loading && !maruClean.loading;
 
   // Modal states
   const [modal, setModal] = useState(null);
@@ -253,45 +264,35 @@ export default function App() {
           year={year}
           month={month}
           onClose={() => setModal(null)}
-          onSave={async (booking) => {
-            const fb = bookingsMap[modal.propertyId];
-            const cl = cleaningMap[modal.propertyId];
-            const id = modal.editId || genId();
+          onSave={(booking) => {
+            const { propertyId, editId } = modal;
+            const fb = bookingsMap[propertyId];
+            const cl = cleaningMap[propertyId];
+            const id = editId || genId();
+            const old = editId
+              ? fb.bookingsRef.current.find((b) => b.id === editId)
+              : null;
 
-            // 수정 시 기존 퇴실일 확인
-            if (modal.editId) {
-              const old = fb.bookings.find((b) => b.id === modal.editId);
-              if (old && old.checkOut !== booking.checkOut) {
-                // 기존 퇴실일의 자동 청소 제거
-                const oldClean = cl.cleaning.find(
-                  (c) => c.date === old.checkOut && c.status === "scheduled" && c.auto
-                );
-                if (oldClean) await cl.deleteCleaning(old.checkOut);
-              }
-            }
-
-            await fb.saveBooking({ id, ...booking });
-
-            // 퇴실일에 청소 '예정' 자동 등록
-            const existingClean = cl.cleaning.find((c) => c.date === booking.checkOut);
-            if (!existingClean) {
-              await cl.saveCleaning(booking.checkOut, { status: "scheduled", auto: true, cleaner: "", memo: "" });
-            }
+            // 예약 쓰기와 청소 자동 등록은 한 배치로 원자적으로 커밋된다.
+            // 로컬 캐시에는 즉시 반영되므로 서버 ack를 기다리지 않고 모달을 닫는다.
+            saveBookingWithCleaning(
+              propertyId,
+              { id, ...booking },
+              { oldBooking: old, latestCleaning: cl.cleaningRef.current }
+            ).catch(reportSyncError);
 
             setModal(null);
           }}
-          onDelete={async (id) => {
-            const fb = bookingsMap[modal.propertyId];
-            const cl = cleaningMap[modal.propertyId];
-            const deleted = fb.bookings.find((b) => b.id === id);
-
-            await fb.deleteBooking(id);
+          onDelete={(id) => {
+            const { propertyId } = modal;
+            const fb = bookingsMap[propertyId];
+            const cl = cleaningMap[propertyId];
+            const deleted = fb.bookingsRef.current.find((b) => b.id === id);
 
             if (deleted) {
-              const autoClean = cl.cleaning.find(
-                (c) => c.date === deleted.checkOut && c.status === "scheduled" && c.auto
-              );
-              if (autoClean) await cl.deleteCleaning(deleted.checkOut);
+              deleteBookingWithCleaning(propertyId, deleted, {
+                latestCleaning: cl.cleaningRef.current,
+              }).catch(reportSyncError);
             }
             setModal(null);
           }}
@@ -310,18 +311,16 @@ export default function App() {
             setModal({ propertyId: detailModal.propertyId, editId: detailModal.bookingId });
             setDetailModal(null);
           }}
-          onDelete={async () => {
-            const fb = bookingsMap[detailModal.propertyId];
-            const cl = cleaningMap[detailModal.propertyId];
-            const deleted = fb.bookings.find((b) => b.id === detailModal.bookingId);
-
-            await fb.deleteBooking(detailModal.bookingId);
+          onDelete={() => {
+            const { propertyId, bookingId } = detailModal;
+            const fb = bookingsMap[propertyId];
+            const cl = cleaningMap[propertyId];
+            const deleted = fb.bookingsRef.current.find((b) => b.id === bookingId);
 
             if (deleted) {
-              const autoClean = cl.cleaning.find(
-                (c) => c.date === deleted.checkOut && c.status === "scheduled" && c.auto
-              );
-              if (autoClean) await cl.deleteCleaning(deleted.checkOut);
+              deleteBookingWithCleaning(propertyId, deleted, {
+                latestCleaning: cl.cleaningRef.current,
+              }).catch(reportSyncError);
             }
             setDetailModal(null);
           }}
@@ -336,11 +335,10 @@ export default function App() {
           cleaningData={cleaningMap[cleaningModal.propertyId].cleaning}
           bookings={bookingsMap[cleaningModal.propertyId].bookings}
           onClose={() => setCleaningModal(null)}
-          onSave={async (updatedEntry) => {
-            await cleaningMap[cleaningModal.propertyId].saveCleaning(
-              cleaningModal.date,
-              updatedEntry
-            );
+          onSave={(updatedEntry) => {
+            cleaningMap[cleaningModal.propertyId]
+              .saveCleaning(cleaningModal.date, updatedEntry)
+              .catch(reportSyncError);
             setCleaningModal(null);
           }}
         />

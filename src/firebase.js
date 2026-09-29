@@ -1,5 +1,9 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDH1MxY5NGtem43kHunP-ObtViG0TDP8r4",
@@ -12,4 +16,11 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+
+// IndexedDB 영속 캐시: 전송 전에 앱이 종료돼도 대기 중인 쓰기가 살아남아
+// 다음 실행 때 재전송된다. (기본값인 메모리 캐시는 종료 시 유실)
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager(),
+  }),
+});
