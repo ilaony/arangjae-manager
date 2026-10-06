@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useRef } from "react";
 import {
   useBookings,
   useCleaning,
@@ -120,6 +120,8 @@ export default function App() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
   const [tab, setTab] = useState("booking");
+  const todayStr = toDateStr(now.getFullYear(), now.getMonth(), now.getDate());
+  const [selectedDate, setSelectedDate] = useState(todayStr);
 
   // Firebase 실시간 데이터 - 숙소별
   const daol = useBookings("daol");
@@ -156,6 +158,23 @@ export default function App() {
   const nextMonth = () => {
     if (month === 11) { setMonth(0); setYear(year + 1); }
     else setMonth(month + 1);
+  };
+
+  const shiftDay = (delta) => {
+    const prev = parseDate(selectedDate);
+    const next = new Date(prev);
+    next.setDate(next.getDate() + delta);
+    setSelectedDate(toDateStr(next.getFullYear(), next.getMonth(), next.getDate()));
+    // 달력은 날짜가 월을 넘어갈 때만 따라온다. 월을 직접 넘겨 둘러보는 중이라면 건드리지 않는다.
+    if (next.getMonth() !== prev.getMonth() || next.getFullYear() !== prev.getFullYear()) {
+      setYear(next.getFullYear());
+      setMonth(next.getMonth());
+    }
+  };
+  const goToday = () => {
+    setSelectedDate(todayStr);
+    setYear(now.getFullYear());
+    setMonth(now.getMonth());
   };
 
   if (!loaded) {
@@ -200,6 +219,10 @@ export default function App() {
         properties={PROPERTIES}
         bookingsMap={bookingsMap}
         cleaningMap={cleaningMap}
+        date={selectedDate}
+        todayStr={todayStr}
+        onShiftDay={shiftDay}
+        onGoToday={goToday}
       />
 
       {/* Month Navigator */}
@@ -381,22 +404,47 @@ function TodayWarn({ labels }) {
   );
 }
 
-// 오늘 하루의 숙소별 현황. 한 숙소의 하루는 퇴실 1건 + 입실 1건 + 청소 1건을
-// 넘지 않으므로 한 줄에 고정 배치된다.
-function TodaySummary({ properties, bookingsMap, cleaningMap }) {
-  const now = new Date();
-  const todayStr = toDateStr(now.getFullYear(), now.getMonth(), now.getDate());
+// 하루치 숙소별 현황. 기본값은 오늘이고 좌우 스와이프(또는 쉐브론)로 날짜를 옮긴다.
+// 한 숙소의 하루는 퇴실 1건 + 입실 1건 + 청소 1건을 넘지 않으므로 한 줄에 고정 배치된다.
+function TodaySummary({
+  properties, bookingsMap, cleaningMap,
+  date, todayStr, onShiftDay, onGoToday,
+}) {
+  const touch = useRef(null);
+  const shown = parseDate(date);
+  const isToday = date === todayStr;
+
+  const handleTouchStart = (e) => {
+    const t = e.touches[0];
+    // iOS standalone PWA 에서 화면 가장자리 스와이프는 뒤로가기로 먹히므로 제외한다
+    if (t.clientX < 24 || t.clientX > window.innerWidth - 24) {
+      touch.current = null;
+      return;
+    }
+    touch.current = { x: t.clientX, y: t.clientY };
+  };
+  const handleTouchEnd = (e) => {
+    const start = touch.current;
+    touch.current = null;
+    if (!start) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    // 세로 스크롤과 구분하기 위해 가로 이동이 충분히 크고 더 지배적일 때만 반응한다
+    if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    onShiftDay(dx < 0 ? 1 : -1);
+  };
 
   const rows = properties.map((prop) => {
     const bookings = bookingsMap[prop.id].bookings;
     const cleaning = cleaningMap[prop.id].cleaning;
 
-    const checkOut = bookings.find((b) => b.checkOut === todayStr) || null;
-    const checkIn = bookings.find((b) => b.checkIn === todayStr) || null;
+    const checkOut = bookings.find((b) => b.checkOut === date) || null;
+    const checkIn = bookings.find((b) => b.checkIn === date) || null;
     const staying =
-      bookings.find((b) => b.checkIn < todayStr && todayStr < b.checkOut) || null;
+      bookings.find((b) => b.checkIn < date && date < b.checkOut) || null;
 
-    const entry = cleaning.find((c) => c.date === todayStr) || null;
+    const entry = cleaning.find((c) => c.date === date) || null;
     const status = entry && entry.status ? entry.status : "none";
     const cleaner = entry && entry.cleaner ? entry.cleaner : "";
 
@@ -422,16 +470,28 @@ function TodaySummary({ properties, bookingsMap, cleaningMap }) {
   const alertCount = rows.filter((r) => r.clean && r.clean.tone === "danger").length;
 
   return (
-    <section style={styles.todayWrap}>
+    <section
+      style={styles.todayWrap}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
       <div style={styles.todayHead}>
-        <span style={styles.todayDate}>
-          오늘 · {now.getMonth() + 1}월 {now.getDate()}일 ({WEEKDAYS[now.getDay()]})
-        </span>
+        <div style={styles.todayNav}>
+          <button onClick={() => onShiftDay(-1)} style={styles.todayChevron} aria-label="이전 날">‹</button>
+          <span style={styles.todayDate}>
+            {isToday ? "오늘 · " : ""}
+            {shown.getMonth() + 1}월 {shown.getDate()}일 ({WEEKDAYS[shown.getDay()]})
+          </span>
+          <button onClick={() => onShiftDay(1)} style={styles.todayChevron} aria-label="다음 날">›</button>
+          {!isToday && (
+            <button onClick={onGoToday} style={styles.todayJump}>오늘로</button>
+          )}
+        </div>
         <span
           style={{ ...styles.todayAgg, color: alertCount ? "#DC2626" : "#64748B" }}
         >
           {cleanCount === 0
-            ? "오늘 청소 없음"
+            ? "청소 없음"
             : alertCount
             ? `청소 ${cleanCount}건 · 확인 필요 ${alertCount}건 ⚠️`
             : `청소 ${cleanCount}건 · 담당자 배정 완료`}
@@ -1251,6 +1311,18 @@ const styles = {
   todayWrap: {
     maxWidth: 1400, margin: "16px auto 0", padding: "0 16px",
     display: "flex", flexDirection: "column", gap: 6,
+    touchAction: "pan-y",
+  },
+  todayNav: { display: "flex", alignItems: "center", gap: 2 },
+  todayChevron: {
+    border: "none", background: "transparent", cursor: "pointer",
+    color: "#94A3B8", fontSize: 20, lineHeight: 1, padding: "0 6px",
+    fontFamily: "inherit",
+  },
+  todayJump: {
+    marginLeft: 8, padding: "3px 10px", border: "1px solid #BFDBFE",
+    borderRadius: 999, background: "#EFF6FF", color: "#1D4ED8",
+    fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
   },
   todayHead: {
     display: "flex", alignItems: "baseline", justifyContent: "space-between",
