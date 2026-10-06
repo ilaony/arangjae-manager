@@ -439,10 +439,21 @@ function TodaySummary({
     const bookings = bookingsMap[prop.id].bookings;
     const cleaning = cleaningMap[prop.id].cleaning;
 
-    const checkOut = bookings.find((b) => b.checkOut === date) || null;
-    const checkIn = bookings.find((b) => b.checkIn === date) || null;
-    const staying =
-      bookings.find((b) => b.checkIn < date && date < b.checkOut) || null;
+    // 한 유닛에 예약이 겹쳐 들어가는 입력 오류가 실제로 있었으므로, 하나만 집지 않고
+    // 해당일에 걸린 예약을 모두 모은다. 하나라도 빠뜨리면 달력과 어긋난다.
+    const checkOuts = bookings.filter((b) => b.checkOut === date);
+    const checkIns = bookings.filter((b) => b.checkIn === date);
+    const stayings = bookings.filter((b) => b.checkIn < date && date < b.checkOut);
+
+    // 정상적인 하루는 '퇴실 1건 + 입실 1건(회전)' 또는 '체류 1건'이다. 그걸 넘으면 겹침이다.
+    const involved = new Set(
+      [...checkOuts, ...checkIns, ...stayings].map((b) => b.id)
+    ).size;
+    const overlap =
+      checkOuts.length > 1 ||
+      checkIns.length > 1 ||
+      stayings.length > 1 ||
+      (stayings.length > 0 && (checkOuts.length > 0 || checkIns.length > 0));
 
     const entry = cleaning.find((c) => c.date === date) || null;
     const status = entry && entry.status ? entry.status : "none";
@@ -451,7 +462,7 @@ function TodaySummary({
     // 청소 필요 여부는 퇴실에서 파생한다. 청소 항목이 없으면 '미등록'으로 드러나므로
     // 자동 등록이 누락돼도 조용히 넘어가지 않는다.
     let clean = null;
-    if (checkOut && status === "none") {
+    if (checkOuts.length && status === "none") {
       clean = { tone: "danger", text: "🧹 청소 미등록" };
     } else if (status === "done") {
       clean = { tone: "ok", text: `🧹 완료${cleaner ? ` · ${cleaner}` : ""}` };
@@ -463,11 +474,20 @@ function TodaySummary({
         : { tone: "danger", text: "🧹 담당자 미정" };
     }
 
-    return { prop, checkOut, checkIn, staying, clean };
+    // 겹침일 때는 체류 손님까지 모두 드러낸다. 평소엔 움직임이 있는 날의 '체류중'이 군더더기라 숨긴다.
+    const quiet = checkOuts.length === 0 && checkIns.length === 0;
+    const showStay = stayings.length > 0 && (quiet || overlap);
+    const showEmpty = quiet && stayings.length === 0;
+
+    return {
+      prop, checkOuts, checkIns, stayings,
+      involved, overlap, showStay, showEmpty, clean,
+    };
   });
 
   const cleanCount = rows.filter((r) => r.clean).length;
   const alertCount = rows.filter((r) => r.clean && r.clean.tone === "danger").length;
+  const overlapCount = rows.filter((r) => r.overlap).length;
 
   return (
     <section
@@ -488,13 +508,17 @@ function TodaySummary({
           )}
         </div>
         <span
-          style={{ ...styles.todayAgg, color: alertCount ? "#DC2626" : "#64748B" }}
+          style={{
+            ...styles.todayAgg,
+            color: alertCount || overlapCount ? "#DC2626" : "#64748B",
+          }}
         >
           {cleanCount === 0
             ? "청소 없음"
             : alertCount
             ? `청소 ${cleanCount}건 · 확인 필요 ${alertCount}건 ⚠️`
             : `청소 ${cleanCount}건 · 담당자 배정 완료`}
+          {overlapCount > 0 && ` · 예약 겹침 ${overlapCount}건 ⚠️`}
         </span>
       </div>
 
@@ -507,33 +531,40 @@ function TodaySummary({
             {r.prop.name}
           </span>
           <div style={styles.todayChips}>
-            {r.checkOut && (
-              <TodayChip tone="plain">
-                🚪 {r.checkOut.guestName}
+            {r.checkOuts.map((b) => (
+              <TodayChip key={`o-${b.id}`} tone="plain">
+                🚪 {b.guestName}
                 <TodayWarn
                   labels={[
-                    r.checkOut.lateCheckOut && "레이트",
-                    r.checkOut.luggageAfter && "짐보관",
+                    b.lateCheckOut && "레이트",
+                    b.luggageAfter && "짐보관",
                   ].filter(Boolean)}
                 />
               </TodayChip>
+            ))}
+            {r.checkOuts.length > 0 && r.checkIns.length > 0 && (
+              <span style={styles.todayArrow}>→</span>
             )}
-            {r.checkOut && r.checkIn && <span style={styles.todayArrow}>→</span>}
-            {r.checkIn && (
-              <TodayChip tone="plain">
-                🔑 {r.checkIn.guestName} {r.checkIn.guests}명
+            {r.checkIns.map((b) => (
+              <TodayChip key={`i-${b.id}`} tone="plain">
+                🔑 {b.guestName} {b.guests}명
                 <TodayWarn
                   labels={[
-                    r.checkIn.earlyCheckIn && "얼리",
-                    r.checkIn.luggageBefore && "짐보관",
+                    b.earlyCheckIn && "얼리",
+                    b.luggageBefore && "짐보관",
                   ].filter(Boolean)}
                 />
               </TodayChip>
-            )}
-            {!r.checkOut && !r.checkIn && (
-              <TodayChip tone="muted">
-                {r.staying ? `💤 체류중 · ${r.staying.guestName}` : "빈방"}
-              </TodayChip>
+            ))}
+            {r.showStay &&
+              r.stayings.map((b) => (
+                <TodayChip key={`s-${b.id}`} tone="muted">
+                  💤 체류중 · {b.guestName}
+                </TodayChip>
+              ))}
+            {r.showEmpty && <TodayChip tone="muted">빈방</TodayChip>}
+            {r.overlap && (
+              <TodayChip tone="danger">⚠️ 예약 {r.involved}건 겹침</TodayChip>
             )}
             {r.clean && <TodayChip tone={r.clean.tone}>{r.clean.text}</TodayChip>}
           </div>
