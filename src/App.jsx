@@ -195,6 +195,13 @@ export default function App() {
         </div>
       </header>
 
+      {/* Today Summary */}
+      <TodaySummary
+        properties={PROPERTIES}
+        bookingsMap={bookingsMap}
+        cleaningMap={cleaningMap}
+      />
+
       {/* Month Navigator */}
       <div style={styles.monthNav}>
         <button onClick={prevMonth} style={styles.navArrow}>◀</button>
@@ -344,6 +351,135 @@ export default function App() {
         />
       )}
     </div>
+  );
+}
+
+// ═══════════════════════════════════════
+//  TodaySummary
+// ═══════════════════════════════════════
+const TONES = {
+  plain: { bg: "#F1F5F9", fg: "#334155" },
+  ok: { bg: "#ECFDF5", fg: "#047857" },
+  info: { bg: "#EFF6FF", fg: "#1D4ED8" },
+  danger: { bg: "#FEF2F2", fg: "#DC2626" },
+  muted: { bg: "transparent", fg: "#94A3B8" },
+};
+
+function TodayChip({ tone, children }) {
+  const t = TONES[tone];
+  return (
+    <span style={{ ...styles.todayChip, background: t.bg, color: t.fg }}>
+      {children}
+    </span>
+  );
+}
+
+function TodayWarn({ labels }) {
+  if (!labels.length) return null;
+  return (
+    <span style={styles.todayWarn}> ⚠️ {labels.join("·")}</span>
+  );
+}
+
+// 오늘 하루의 숙소별 현황. 한 숙소의 하루는 퇴실 1건 + 입실 1건 + 청소 1건을
+// 넘지 않으므로 한 줄에 고정 배치된다.
+function TodaySummary({ properties, bookingsMap, cleaningMap }) {
+  const now = new Date();
+  const todayStr = toDateStr(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const rows = properties.map((prop) => {
+    const bookings = bookingsMap[prop.id].bookings;
+    const cleaning = cleaningMap[prop.id].cleaning;
+
+    const checkOut = bookings.find((b) => b.checkOut === todayStr) || null;
+    const checkIn = bookings.find((b) => b.checkIn === todayStr) || null;
+    const staying =
+      bookings.find((b) => b.checkIn < todayStr && todayStr < b.checkOut) || null;
+
+    const entry = cleaning.find((c) => c.date === todayStr) || null;
+    const status = entry && entry.status ? entry.status : "none";
+    const cleaner = entry && entry.cleaner ? entry.cleaner : "";
+
+    // 청소 필요 여부는 퇴실에서 파생한다. 청소 항목이 없으면 '미등록'으로 드러나므로
+    // 자동 등록이 누락돼도 조용히 넘어가지 않는다.
+    let clean = null;
+    if (checkOut && status === "none") {
+      clean = { tone: "danger", text: "🧹 청소 미등록" };
+    } else if (status === "done") {
+      clean = { tone: "ok", text: `🧹 완료${cleaner ? ` · ${cleaner}` : ""}` };
+    } else if (status === "issue") {
+      clean = { tone: "danger", text: `🧹 이슈${cleaner ? ` · ${cleaner}` : ""}` };
+    } else if (status === "scheduled") {
+      clean = cleaner
+        ? { tone: "info", text: `🧹 ${cleaner}` }
+        : { tone: "danger", text: "🧹 담당자 미정" };
+    }
+
+    return { prop, checkOut, checkIn, staying, clean };
+  });
+
+  const cleanCount = rows.filter((r) => r.clean).length;
+  const alertCount = rows.filter((r) => r.clean && r.clean.tone === "danger").length;
+
+  return (
+    <section style={styles.todayWrap}>
+      <div style={styles.todayHead}>
+        <span style={styles.todayDate}>
+          오늘 · {now.getMonth() + 1}월 {now.getDate()}일 ({WEEKDAYS[now.getDay()]})
+        </span>
+        <span
+          style={{ ...styles.todayAgg, color: alertCount ? "#DC2626" : "#64748B" }}
+        >
+          {cleanCount === 0
+            ? "오늘 청소 없음"
+            : alertCount
+            ? `청소 ${cleanCount}건 · 확인 필요 ${alertCount}건 ⚠️`
+            : `청소 ${cleanCount}건 · 담당자 배정 완료`}
+        </span>
+      </div>
+
+      {rows.map((r) => (
+        <div
+          key={r.prop.id}
+          style={{ ...styles.todayRow, borderLeft: `3px solid ${r.prop.color}` }}
+        >
+          <span style={{ ...styles.todayProp, color: r.prop.color }}>
+            {r.prop.name}
+          </span>
+          <div style={styles.todayChips}>
+            {r.checkOut && (
+              <TodayChip tone="plain">
+                🚪 {r.checkOut.guestName}
+                <TodayWarn
+                  labels={[
+                    r.checkOut.lateCheckOut && "레이트",
+                    r.checkOut.luggageAfter && "짐보관",
+                  ].filter(Boolean)}
+                />
+              </TodayChip>
+            )}
+            {r.checkOut && r.checkIn && <span style={styles.todayArrow}>→</span>}
+            {r.checkIn && (
+              <TodayChip tone="plain">
+                🔑 {r.checkIn.guestName} {r.checkIn.guests}명
+                <TodayWarn
+                  labels={[
+                    r.checkIn.earlyCheckIn && "얼리",
+                    r.checkIn.luggageBefore && "짐보관",
+                  ].filter(Boolean)}
+                />
+              </TodayChip>
+            )}
+            {!r.checkOut && !r.checkIn && (
+              <TodayChip tone="muted">
+                {r.staying ? `💤 체류중 · ${r.staying.guestName}` : "빈방"}
+              </TodayChip>
+            )}
+            {r.clean && <TodayChip tone={r.clean.tone}>{r.clean.text}</TodayChip>}
+          </div>
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -1112,6 +1248,30 @@ const styles = {
     transition: "all 0.15s",
   },
   tabBtnActive: { background: "#EFF6FF", color: "#2563EB" },
+  todayWrap: {
+    maxWidth: 1400, margin: "16px auto 0", padding: "0 16px",
+    display: "flex", flexDirection: "column", gap: 6,
+  },
+  todayHead: {
+    display: "flex", alignItems: "baseline", justifyContent: "space-between",
+    gap: 10, flexWrap: "wrap", padding: "0 2px 4px",
+  },
+  todayDate: { fontSize: 14, fontWeight: 800, color: "#1E293B" },
+  todayAgg: { fontSize: 12, fontWeight: 700 },
+  todayRow: {
+    display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+    background: "#FFF", borderRadius: 10, padding: "9px 12px",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+  },
+  todayProp: { fontSize: 13, fontWeight: 800, minWidth: 86 },
+  todayChips: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
+  todayChip: {
+    display: "inline-flex", alignItems: "center",
+    padding: "3px 9px", borderRadius: 999,
+    fontSize: 12, fontWeight: 600, whiteSpace: "nowrap",
+  },
+  todayWarn: { color: "#DC2626", fontWeight: 800 },
+  todayArrow: { color: "#94A3B8", fontSize: 12, fontWeight: 700 },
   monthNav: {
     display: "flex", alignItems: "center", justifyContent: "center", gap: 16,
     padding: "20px 0 8px",
