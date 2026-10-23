@@ -303,11 +303,15 @@ export default function App() {
               ? fb.bookingsRef.current.find((b) => b.id === editId)
               : null;
 
+            // 저장은 문서를 통째로 교체하므로, 모달이 다루지 않는 필드는 직접 실어 보낸다.
+            // (부킹닷컴 예약번호는 취소 통보가 번호만 알려줘서 유실되면 대조할 수가 없다)
+            const carried = old && old.bookNumber ? { bookNumber: old.bookNumber } : {};
+
             // 예약 쓰기와 청소 자동 등록은 한 배치로 원자적으로 커밋된다.
             // 로컬 캐시에는 즉시 반영되므로 서버 ack를 기다리지 않고 모달을 닫는다.
             saveBookingWithCleaning(
               propertyId,
-              { id, ...booking },
+              { id, ...booking, ...carried },
               { oldBooking: old, latestCleaning: cl.cleaningRef.current }
             ).catch(reportSyncError);
 
@@ -1097,6 +1101,14 @@ function DetailModal({ property, booking, onClose, onEdit, onDelete }) {
             <span style={styles.detailLabel}>유입경로</span>
             <span style={{ ...styles.channelBadge, background: ch ? ch.color : "#94A3B8" }}>{ch ? ch.name : "-"}</span>
           </div>
+          {booking.bookNumber && (
+            <div style={styles.detailRow}>
+              <span style={styles.detailLabel}>예약번호</span>
+              <span style={{ ...styles.detailValue, fontVariantNumeric: "tabular-nums" }}>
+                {booking.bookNumber}
+              </span>
+            </div>
+          )}
           <div style={styles.detailRow}>
             <span style={styles.detailLabel}>연락처</span>
             <span style={styles.detailValue}>{booking.phone || "-"}</span>
