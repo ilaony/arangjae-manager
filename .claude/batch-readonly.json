@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__aside__repl",
+      "mcp__aside__browser_profiles",
+      "Read",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(sed:*)",
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)"
+    ],
+    "deny": [
+      "Bash(curl -X POST:*)",
+      "Bash(curl -s -X POST:*)",
+      "Bash(curl -sX POST:*)",
+      "Bash(curl -S -X POST:*)",
+      "Bash(curl -X PATCH:*)",
+      "Bash(curl -s -X PATCH:*)",
+      "Bash(curl -X DELETE:*)",
+      "Bash(curl -s -X DELETE:*)",
+      "Bash(curl --request POST:*)",
+      "Bash(curl --request PATCH:*)",
+      "Bash(curl --request DELETE:*)"
+    ]
+  }
+}
