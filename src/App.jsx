@@ -61,6 +61,11 @@ function parseDate(s) {
   const [y, m, d] = s.split("-").map(Number);
   return new Date(y, m - 1, d);
 }
+// 알림으로 자동 등록된 예약은 인원을 모른 채 guests=0으로 들어온다. 동기화 때 채운다.
+function guestsText(n, unit = "명") {
+  return n ? `${n}${unit}` : "인원 미정";
+}
+
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -110,7 +115,7 @@ function buildCleaningScheduleText(property, year, month, cleaningData, bookings
       .sort((x, y) => x.checkIn.localeCompare(y.checkIn))[0];
 
     const parts = [];
-    parts.push(nextBk ? `${nextBk.guests}인 세팅` : "세팅 미정");
+    parts.push(nextBk ? (nextBk.guests ? `${nextBk.guests}인 세팅` : "인원 미정 세팅") : "세팅 미정");
     if (checkoutBk && checkoutBk.luggageAfter) parts.push("체크아웃 후 짐보관");
     if (checkoutBk && checkoutBk.lateCheckOut) parts.push("레이트 체크아웃");
     if (nextBk && nextBk.earlyCheckIn) parts.push("얼리 체크인");
@@ -560,7 +565,7 @@ function TodaySummary({
             )}
             {r.checkIns.map((b) => (
               <TodayChip key={`i-${b.id}`} tone="plain">
-                🔑 {b.guestName} {b.guests}명
+                🔑 {b.guestName} {guestsText(b.guests)}
                 <TodayWarn
                   labels={[
                     b.earlyCheckIn && "얼리",
@@ -766,7 +771,7 @@ function PropertyCalendar({
                     </div>
                     {nextBk && (
                       <div style={styles.cleanGuestTag}>
-                        👤 {nextBk.guests}명
+                        👤 {guestsText(nextBk.guests)}
                       </div>
                     )}
                   </div>
@@ -1124,7 +1129,7 @@ function DetailModal({ property, booking, onClose, onEdit, onDelete }) {
           </div>
           <div style={styles.detailRow}>
             <span style={styles.detailLabel}>인원</span>
-            <span style={styles.detailValue}>{booking.guests}명</span>
+            <span style={styles.detailValue}>{guestsText(booking.guests)}</span>
           </div>
           <div style={styles.detailRow}>
             <span style={styles.detailLabel}>국적</span>
@@ -1237,7 +1242,7 @@ function CleaningModal({ property, date, cleaningData, bookings, onClose, onSave
                 <div style={styles.cleanInfoRow}>
                   <span style={styles.cleanInfoLabel}>인원수</span>
                   <span style={{ ...styles.cleanInfoValue, fontWeight: 700 }}>
-                    {nextBooking.guests}명
+                    {guestsText(nextBooking.guests)}
                   </span>
                 </div>
                 {nextBooking.earlyCheckIn && (
