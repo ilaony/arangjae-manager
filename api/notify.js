@@ -1,5 +1,6 @@
 // POST /api/notify — MacroDroid가 에어비앤비·부킹닷컴 알림을 보내는 곳.
-// 본문(JSON): { "secret": "...", "app": "[앱 이름]", "message": "[알림 제목]//[알림 내용]" }
+// 값 3개: secret, app("[앱 이름]"), message("[알림 제목]//[알림 내용]")
+// 쿼리 파라미터(권장 — MacroDroid가 인코딩해 줌), 폼 본문, JSON 본문 어느 쪽으로 보내도 된다.
 //
 // Vercel 환경 변수:
 //   NOTIFY_SECRET        MacroDroid와 맞춘 비밀값 (필수)
@@ -124,9 +125,11 @@ const ICON = { added: "✅", deleted: "🗑", stop: "⚠️", error: "❌" };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST only" });
-  let body = req.body;
-  if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
-  body = body || {};
+  // 본문(JSON·폼)과 쿼리 파라미터를 모두 받는다. MacroDroid는 쿼리 파라미터 값을 인코딩해 주므로
+  // 알림 문구의 "#예약번호"가 잘리지 않는다(주소에 직접 넣으면 # 뒤가 조각(fragment)으로 빠진다).
+  let fromBody = req.body;
+  if (typeof fromBody === "string") { try { fromBody = JSON.parse(fromBody); } catch { fromBody = {}; } }
+  const body = { ...(req.query || {}), ...(fromBody || {}) };
 
   if (!process.env.NOTIFY_SECRET || body.secret !== process.env.NOTIFY_SECRET) {
     return res.status(401).json({ ok: false, error: "bad secret" });
