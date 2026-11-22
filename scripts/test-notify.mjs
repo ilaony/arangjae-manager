@@ -141,4 +141,30 @@ await handle(io, A("2027년 2월 11일~14일 • [마루]신축: 라일라//Bob 
 r = await handle(io, A("Angela님이 예약하셨습니다.//Angela님이 2027년 2월 11일~14일에 호스트님의 숙소를 예약했습니다."));
 assert.equal(r.action, "stop");
 
+// ── 에어비앤비 취소 (실제 문구: 예약코드 없음) ──
+const PAN = "Pan 님이 예약을 취소했습니다//취소된 예약은 2026년 8월 31일 ~ 9월 4일에 예정된 강남역/서초역/교대역 /넓은 3룸 2욕실 가족 숙소/각방 에어컨 총 5대 리스팅에 대한 것으로, 해당 날짜에 새로운 예약을 받으실 수 있도록 달력에도 반영되었습니다.";
+p = parse(A(PAN));
+assert.deepEqual([p.kind, p.guestName, p.prop, p.checkIn, p.checkOut], ["airbnb-cancel", "Pan", "daol", "2026-08-31", "2026-09-04"]);
+
+const panBooking = { checkIn: "2026-08-31", checkOut: "2026-09-04", bookNumber: "HMPANTEST1", guestName: "Pan", channel: "airbnb" };
+io = fakeIo({ bookings: { daol: [panBooking] }, cleaning: { daol: { "2026-09-04": { auto: true, cleaner: "김지영" } } }, ical: { daol: [] } });
+r = await handle(io, A(PAN));
+assert.equal(r.action, "deleted", r.note);
+assert.equal(io.db.bookings.daol.length, 0);
+assert.ok(!io.db.cleaning.daol["2026-09-04"]);
+assert.match(r.note, /김지영/);
+
+io = fakeIo({ bookings: { daol: [panBooking] }, ical: { daol: [{ checkIn: "2026-08-31", checkOut: "2026-09-04", code: "HMPANTEST1" }] } });
+r = await handle(io, A(PAN));
+assert.equal(r.action, "stop"); // 아직 iCal에 있으면 지우지 않는다
+assert.equal(io.db.bookings.daol.length, 1);
+
+io = fakeIo({ bookings: { daol: [{ ...panBooking, guestName: "김철수" }] }, ical: { daol: [] } });
+r = await handle(io, A(PAN));
+assert.equal(r.action, "stop"); // 이름이 다르면 멈춘다
+
+io = fakeIo({ ical: { daol: [] } });
+r = await handle(io, A(PAN));
+assert.equal(r.action, "skip"); // 앱에 없으면 건너뜀
+
 console.log("모든 테스트 통과");

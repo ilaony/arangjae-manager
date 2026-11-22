@@ -117,6 +117,16 @@ export function parseAirbnb({ title, text }) {
     };
   }
 
+  // "Pan 님이 예약을 취소했습니다" // "취소된 예약은 2026년 8월 31일 ~ 9월 4일에 예정된 강남역/…/각방 에어컨 총 5대 리스팅에 대한 것으로, …"
+  // 예약코드가 없다 — 이름·날짜·리스팅으로 앱의 예약을 찾고, 그 예약의 코드가 iCal에서 사라졌는지로 확인한다.
+  const cancel = title.match(/^(.+?)\s*님이 예약을 취소했습니다/);
+  if (cancel) {
+    const r = parseRange(text);
+    const listing = (text.match(/예정된\s+(.+?)\s+리스팅에 대한/) || [])[1] || "";
+    const dates = r && fullDates(r);
+    if (!dates) return { kind: "ignore", reason: "에어비앤비 취소 알림의 날짜를 못 읽음" };
+    return { kind: "airbnb-cancel", bookNumber: null, guestName: cancel[1].trim(), listing, prop: propFromName(listing), ...dates, raw: `${title}//${text}` };
+  }
   if (/취소/.test(title)) {
     const code = (`${title} ${text}`.match(/\b(HM[A-Z0-9]{8})\b/) || [])[1];
     return { kind: "airbnb-cancel", bookNumber: code || null, raw: `${title}//${text}` };
@@ -260,8 +270,21 @@ async function handleAirbnbPiece(io, p) {
   return r;
 }
 
-// 에어비앤비 취소: 알림 문구를 아직 못 봤다. 예약코드가 있고, iCal에서도 사라졌을 때만 지운다.
+// 에어비앤비 취소: 문구에 예약코드가 없으므로 숙소·날짜로 앱 예약을 찾고, 이름이 맞고,
+// 그 예약의 코드가 iCal에서도 사라졌을 때만 지운다.
 async function handleAirbnbCancel(io, p) {
+  if (!p.bookNumber && p.checkIn) {
+    if (!p.prop) return { ok: false, action: "stop", note: `에어비앤비 취소: 리스팅 이름으로 숙소를 못 가림 — ${p.listing || "이름 없음"}` };
+    const list = await io.listBookings(p.prop);
+    const hit = list.filter((b) => b.checkIn === p.checkIn && b.checkOut === p.checkOut);
+    const where = `${PROP_LABEL[p.prop]} ${p.checkIn}~${p.checkOut} ${p.guestName}`;
+    if (!hit.length) return { ok: true, action: "skip", note: `에어비앤비 취소 — 앱에 없음 (${where})` };
+    if (hit.length > 1) return { ok: false, action: "stop", note: `에어비앤비 취소 — 같은 날짜 예약이 ${hit.length}건 (${where})` };
+    const b = hit[0];
+    if (!sameName(b.guestName, p.guestName)) return { ok: false, action: "stop", note: `에어비앤비 취소 — 앱 이름(${b.guestName})과 알림 이름(${p.guestName})이 다름 (${where})` };
+    if (!/^HM/.test(b.bookNumber || "")) return { ok: false, action: "stop", note: `에어비앤비 취소 — 앱 예약에 에어비앤비 예약코드가 없음 (${where})` };
+    p = { ...p, bookNumber: b.bookNumber };
+  }
   if (!p.bookNumber) return { ok: false, action: "stop", note: `에어비앤비 취소 알림에서 예약코드를 못 찾음 — 문구: ${p.raw.slice(0, 120)}` };
   for (const prop of PROPS) {
     const events = await io.ical(prop);
