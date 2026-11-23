@@ -107,6 +107,11 @@ export function parseAirbnb({ title, text }) {
     const r = parseRange(head[1]);
     const guest = (text.match(/^(.+?)\s*님\s*,?\s*안녕하세요/) || [])[1];
     if (!r || !guest) return { kind: "ignore", reason: "자동 답변의 날짜나 이름을 못 읽음" };
+    // 제목 날짜에 연도가 없으면(올해 날짜) 본문의 "예약하신 날짜는 2026년 12월 17일"에서 가져온다
+    if (!r.y1) {
+      const y = text.match(/예약하신 날짜는\s*(\d{4})년\s*(\d+)월\s*(\d+)일/);
+      if (y && Number(y[2]) === r.m1 && Number(y[3]) === r.d1) r.y1 = Number(y[1]);
+    }
     return {
       kind: "airbnb-reply",
       guestName: guest.trim(),
@@ -226,29 +231,53 @@ async function handleBookingCancel(io, p) {
   return cancelBooking(io, p.bookNumber);
 }
 
-// 에어비앤비 신규: 예약 알림(이름·연도 있는 날짜) + 자동 답변(리스팅) + iCal(예약코드)을 맞춘다.
+// 에어비앤비 신규: 예약 알림(이름·날짜) + 자동 답변(리스팅·이름·날짜) + iCal(예약코드)을 맞춘다.
+// 둘 중 하나만 와도 등록할 수 있다 —
+//   예약 알림만: 세 숙소 iCal에서 같은 날짜의 새 예약이 딱 하나면 그 숙소
+//   자동 답변만: 리스팅으로 숙소를 정하고, 그 숙소 iCal에서 같은 날짜의 새 예약
+// 먼저 온 쪽으로 이미 등록했으면, 나중에 온 쪽이 숙소·이름이 같은지 다시 확인한다.
 async function handleAirbnbPiece(io, p) {
   const prev = (await io.getInbox(p.key)) || {};
-  if (prev.done) return { ok: true, action: "skip", note: "이미 처리한 예약" };
+
+  if (prev.done) {
+    const label = p.kind === "airbnb-reply" ? "자동 답변" : "예약 알림";
+    const name = prev.noticeName || prev.replyName;
+    if (p.kind === "airbnb-reply" && prev.prop && p.prop && p.prop !== prev.prop) {
+      return { ok: false, action: "stop", note: `등록은 ${PROP_LABEL[prev.prop]}(${prev.code})로 했는데 자동 답변은 ${PROP_LABEL[p.prop]}를 가리킴 — 확인 필요 (${p.guestName} ${p.key.slice(5)})` };
+    }
+    if (p.kind === "airbnb-reply" && !p.prop) {
+      return { ok: false, action: "stop", note: `등록은 ${PROP_LABEL[prev.prop] || "?"}(${prev.code})로 했는데 자동 답변의 리스팅으로 숙소를 못 가림: ${p.listing}` };
+    }
+    if (name && !sameName(name, p.guestName)) {
+      return { ok: false, action: "stop", note: `등록한 예약(${name}, ${prev.code})과 ${label}(${p.guestName})의 이름이 다름 — 확인 필요` };
+    }
+    return { ok: true, action: "skip", note: `이미 처리한 예약 — ${label}도 일치 (${prev.code})` };
+  }
+
   const cur = { ...prev };
   if (p.kind === "airbnb-notice") Object.assign(cur, { noticeName: p.guestName, checkIn: p.checkIn, checkOut: p.checkOut });
-  else Object.assign(cur, { replyName: p.guestName, listing: p.listing, prop: p.prop || "" , ...(p.checkIn ? { replyCheckIn: p.checkIn } : {}) });
+  else Object.assign(cur, { replyName: p.guestName, listing: p.listing, prop: p.prop || "", ...(p.checkIn ? { replyCheckIn: p.checkIn, replyCheckOut: p.checkOut } : {}) });
   await io.putInbox(p.key, cur);
 
-  if (!cur.noticeName) return { ok: true, action: "wait", note: "자동 답변 받음 — 예약 알림을 기다림" };
-  if (cur.replyName && !sameName(cur.noticeName, cur.replyName)) {
+  if (cur.noticeName && cur.replyName && !sameName(cur.noticeName, cur.replyName)) {
     return { ok: false, action: "stop", note: `예약 알림(${cur.noticeName})과 자동 답변(${cur.replyName})의 이름이 다름` };
   }
   if (cur.replyName && cur.listing && !cur.prop) {
     return { ok: false, action: "stop", note: `리스팅 이름으로 숙소를 못 가림: ${cur.listing}` };
   }
 
+  // 날짜와 이름: 예약 알림이 우선, 없으면 자동 답변
+  const checkIn = cur.checkIn || cur.replyCheckIn;
+  const checkOut = cur.checkOut || cur.replyCheckOut;
+  const guestName = cur.noticeName || cur.replyName;
+  if (!checkIn) return { ok: true, action: "wait", note: "자동 답변의 연도를 못 읽음 — 예약 알림을 기다림" };
+
   // 숙소를 iCal로 찾는다: 자동 답변이 있으면 그 숙소만, 없으면 세 숙소를 다 본다.
   const candidates = cur.prop ? [cur.prop] : PROPS;
   const found = [];
   for (const prop of candidates) {
     const events = await io.ical(prop);
-    for (const e of events) if (e.code && e.checkIn === cur.checkIn && e.checkOut === cur.checkOut) found.push({ prop, code: e.code });
+    for (const e of events) if (e.code && e.checkIn === checkIn && e.checkOut === checkOut) found.push({ prop, code: e.code });
   }
   const fresh = [];
   for (const f of found) {
@@ -260,12 +289,14 @@ async function handleAirbnbPiece(io, p) {
     return { ok: true, action: "skip", note: `이미 앱에 있음 (${found.map((f) => f.code).join(", ")})` };
   }
   if (fresh.length !== 1) {
-    if (!cur.replyName) return { ok: true, action: "wait", note: `iCal에서 ${cur.checkIn}~${cur.checkOut} 새 예약 ${fresh.length}건 — 자동 답변을 기다림` };
-    return { ok: false, action: "stop", note: `iCal에서 ${cur.checkIn}~${cur.checkOut} 새 예약을 ${fresh.length}건 찾음 — 동기화 때 확인` };
+    // 짝이 아직 안 왔으면 기다린다(짝이 오면 그때 iCal을 다시 본다). 둘 다 왔는데도 안 맞으면 멈춘다.
+    if (!cur.replyName) return { ok: true, action: "wait", note: `iCal에서 ${checkIn}~${checkOut} 새 예약 ${fresh.length}건 — 자동 답변을 기다림` };
+    if (!cur.noticeName) return { ok: true, action: "wait", note: `iCal에서 ${checkIn}~${checkOut} 새 예약 ${fresh.length}건 — 예약 알림을 기다림` };
+    return { ok: false, action: "stop", note: `iCal에서 ${PROP_LABEL[cur.prop] || "세 숙소"} ${checkIn}~${checkOut} 새 예약을 ${fresh.length}건 찾음 — 동기화 때 확인 (${guestName})` };
   }
 
   const { prop, code } = fresh[0];
-  const r = await addBooking(io, prop, newBookingDoc({ checkIn: cur.checkIn, checkOut: cur.checkOut, channel: "airbnb", guestName: cur.noticeName, bookNumber: code }));
+  const r = await addBooking(io, prop, newBookingDoc({ checkIn, checkOut, channel: "airbnb", guestName, bookNumber: code }));
   if (r.action === "added" || r.action === "skip") await io.putInbox(p.key, { ...cur, prop, code, done: true });
   return r;
 }

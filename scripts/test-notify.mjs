@@ -135,11 +135,54 @@ r = await handle(io, A("Angela님이 예약하셨습니다.//Angela님이 2027�
 assert.equal(r.action, "added", r.note); // 알림이 다시 오면 그때 들어간다
 assert.equal(io.db.bookings["arangjae-maru"][0].bookNumber, "HMYJC2RWWB");
 
-// 이름이 다르면 멈춘다
-io = fakeIo({ ical });
+// 둘 다 대기 중일 때 이름이 다르면 멈춘다
+io = fakeIo({ ical: {} });
 await handle(io, A("2027년 2월 11일~14일 • [마루]신축: 라일라//Bob 님, 안녕하세요. 저희 숙소를 예약해주셔서 진심으로 감사드려요."));
 r = await handle(io, A("Angela님이 예약하셨습니다.//Angela님이 2027년 2월 11일~14일에 호스트님의 숙소를 예약했습니다."));
 assert.equal(r.action, "stop");
+
+// ── 실제 사례: 용환 (예약 알림 12:32 → 자동 답변 12:33) ──
+const YH_NOTICE = "용환님이 예약하셨습니다.//용환님이 2026년 12월 17일~20일에 호스트님의 숙소를 예약했습니다.";
+const YH_REPLY = '12월 17일~20일 • [Gangnam/3BR·2BA] 복층 독채 5베드｜교대·강남·고속터미널: 소피//용환님 안녕하세요. 저희 숙소에 예약해주셔서 진심으로 감사드려요. 소중한 여행을 "다올스테이"와 함께 해주셔서 정말 감사합니다:) 예약하신 날짜는 2026년 12월 17일입니다. 오시는 시간에 맞춰서 청결하게 준비해놓겠습니다.';
+const yhIcal = { daol: [{ checkIn: "2026-12-17", checkOut: "2026-12-20", code: "HMPKATZBTC" }] };
+
+p = parse(A(YH_REPLY));
+assert.deepEqual([p.checkIn, p.checkOut, p.prop, p.guestName], ["2026-12-17", "2026-12-20", "daol", "용환"]); // 연도는 본문에서
+
+// 알림 → 자동 답변: 알림으로 등록, 자동 답변은 숙소·이름이 같아 조용히 건너뜀
+io = fakeIo({ ical: yhIcal });
+r = await handle(io, A(YH_NOTICE));
+assert.equal(r.action, "added", r.note);
+r = await handle(io, A(YH_REPLY));
+assert.equal(r.action, "skip", r.note);
+assert.match(r.note, /자동 답변도 일치/);
+
+// 예약 알림이 빠지고 자동 답변만 와도 등록
+io = fakeIo({ ical: yhIcal });
+r = await handle(io, A(YH_REPLY));
+assert.equal(r.action, "added", r.note);
+assert.deepEqual([io.db.bookings.daol[0].bookNumber, io.db.bookings.daol[0].guestName], ["HMPKATZBTC", "용환"]);
+r = await handle(io, A(YH_NOTICE)); // 나중에 알림이 와도 중복 없음
+assert.equal(r.action, "skip");
+assert.equal(io.db.bookings.daol.length, 1);
+
+// 자동 답변만 왔는데 iCal에 아직 없으면 기다림(앱에 쓰지 않음)
+io = fakeIo({ ical: {} });
+r = await handle(io, A(YH_REPLY));
+assert.equal(r.action, "wait");
+assert.equal(io.db.bookings.daol.length, 0);
+
+// 알림으로 다올에 등록했는데 자동 답변이 마루를 가리키면 ⚠️
+io = fakeIo({ ical: yhIcal });
+await handle(io, A(YH_NOTICE));
+r = await handle(io, A(YH_REPLY.replace("[Gangnam/3BR·2BA] 복층 독채 5베드｜교대·강남·고속터미널", "[마루]신축 엘리베이터")));
+assert.equal(r.action, "stop", r.note);
+
+// 등록한 이름과 자동 답변 이름이 다르면 ⚠️
+io = fakeIo({ ical: yhIcal });
+await handle(io, A(YH_NOTICE));
+r = await handle(io, A(YH_REPLY.replace("용환님 안녕하세요", "민수님 안녕하세요")));
+assert.equal(r.action, "stop", r.note);
 
 // ── 에어비앤비 취소 (실제 문구: 예약코드 없음) ──
 const PAN = "Pan 님이 예약을 취소했습니다//취소된 예약은 2026년 8월 31일 ~ 9월 4일에 예정된 강남역/서초역/교대역 /넓은 3룸 2욕실 가족 숙소/각방 에어컨 총 5대 리스팅에 대한 것으로, 해당 날짜에 새로운 예약을 받으실 수 있도록 달력에도 반영되었습니다.";
