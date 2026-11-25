@@ -93,6 +93,26 @@ function makeIo(key) {
       await commit(writes);
       cache.delete(prop);
     },
+    // 예약 날짜만 고치고(updateMask), 청소를 옛 퇴실일에서 새 퇴실일로 옮긴다 — 한 배치로
+    async commitChange(prop, booking, dates, moveFrom, createNew) {
+      const writes = [{
+        update: { name: booking._name, fields: toFields(dates) },
+        updateMask: { fieldPaths: Object.keys(dates) },
+        currentDocument: { updateTime: booking._updateTime },
+      }];
+      if (moveFrom) writes.push({ delete: moveFrom._name, currentDocument: { updateTime: moveFrom._updateTime } });
+      if (createNew) {
+        const fields = moveFrom ? stripMeta(moveFrom) : { status: "scheduled", auto: true, cleaner: "", memo: "" };
+        writes.push({
+          update: { name: `${DOCS}/cleaning-${prop}/${dates.checkOut}`, fields: toFields(fields) },
+          currentDocument: { exists: false },
+        });
+      }
+      await commit(writes);
+      cache.delete(prop);
+    },
+    // 한국 시간 기준 오늘
+    today: () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10),
     getInbox: (k) => get(`notify-inbox/${k}`),
     putInbox: (k, obj) => put(`notify-inbox/${k}`, { ...stripMeta(obj), updatedAt: new Date().toISOString() }),
     async wasCancelled(bookNumber) { return !!(await get(`notify-log/${bookNumber}`)); },
@@ -121,7 +141,7 @@ async function tell(text) {
   }).catch(() => {});
 }
 
-const ICON = { added: "✅", deleted: "🗑", stop: "⚠️", error: "❌" };
+const ICON = { added: "✅", deleted: "🗑", changed: "🔁", stop: "⚠️", error: "❌" };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST only" });

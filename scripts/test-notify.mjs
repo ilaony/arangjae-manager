@@ -18,6 +18,13 @@ function fakeIo({ bookings = {}, cleaning = {}, ical = {} }) {
       db.bookings[p] = db.bookings[p].filter((x) => x !== b);
       if (c) delete db.cleaning[p][b.checkOut];
     },
+    commitChange: async (p, b, dates, moveFrom, createNew) => {
+      const oldOut = b.checkOut;
+      Object.assign(b, dates);
+      if (moveFrom) delete db.cleaning[p][oldOut];
+      if (createNew) db.cleaning[p][dates.checkOut] = moveFrom ? { ...moveFrom } : { status: "scheduled", auto: true, cleaner: "", memo: "" };
+    },
+    today: () => "2026-11-26",
     getInbox: async (k) => db.inbox[k] || null,
     putInbox: async (k, o) => { db.inbox[k] = o; },
     wasCancelled: async (n) => !!db.log[n],
@@ -209,5 +216,63 @@ assert.equal(r.action, "stop"); // 이름이 다르면 멈춘다
 io = fakeIo({ ical: { daol: [] } });
 r = await handle(io, A(PAN));
 assert.equal(r.action, "skip"); // 앱에 없으면 건너뜀
+
+
+// ── 에어비앤비 변경 (실제 사례: Baekyung 6/28~7/12 → 6/28~7/11) ──
+const BK_REQ = "변경 요청//Baekyung님이 에어비앤비 예약의 숙박 기간을 2027년 6월 28일 - 2027년 7월 11일로 변경하고 싶어 합니다.";
+const BK_DONE = "예약 변경 완료//Baekyung님의 예약이 변경되었습니다.";
+p = parse(A(BK_REQ));
+assert.deepEqual([p.kind, p.guestName, p.checkIn, p.checkOut], ["airbnb-change-request", "Baekyung", "2027-06-28", "2027-07-11"]);
+p = parse(A(BK_DONE));
+assert.deepEqual([p.kind, p.guestName], ["airbnb-change-done", "Baekyung"]);
+
+const bkBooking = () => ({ checkIn: "2027-06-28", checkOut: "2027-07-12", bookNumber: "HMZ2SF8XSD", guestName: "Baekyung", channel: "airbnb" });
+const bkIcal = { daol: [{ checkIn: "2027-06-28", checkOut: "2027-07-11", code: "HMZ2SF8XSD" }] };
+
+// 요청 → 완료: 날짜 수정 + 청소 이동
+io = fakeIo({ bookings: { daol: [bkBooking()] }, cleaning: { daol: { "2027-07-12": { auto: true, cleaner: "" } } }, ical: bkIcal });
+r = await handle(io, A(BK_REQ));
+assert.equal(r.action, "wait");
+assert.equal(io.db.bookings.daol[0].checkOut, "2027-07-12"); // 요청만으로는 안 바꾼다
+r = await handle(io, A(BK_DONE));
+assert.equal(r.action, "changed", r.note);
+assert.equal(io.db.bookings.daol[0].checkOut, "2027-07-11");
+assert.ok(io.db.cleaning.daol["2027-07-11"] && !io.db.cleaning.daol["2027-07-12"]);
+r = await handle(io, A(BK_DONE)); // 같은 알림이 또 와도 이미 반영됨
+assert.equal(r.action, "skip");
+
+// 요청 없이 완료만 와도 iCal로 반영, 담당자째 옮기고 알림
+io = fakeIo({ bookings: { daol: [bkBooking()] }, cleaning: { daol: { "2027-07-12": { auto: true, cleaner: "김지영" } } }, ical: bkIcal });
+r = await handle(io, A(BK_DONE));
+assert.equal(r.action, "changed", r.note);
+assert.equal(io.db.cleaning.daol["2027-07-11"].cleaner, "김지영");
+assert.match(r.note, /김지영님께 날짜 변경/);
+
+// 요청 날짜와 iCal 날짜가 다르면 멈춘다
+io = fakeIo({ bookings: { daol: [bkBooking()] }, ical: bkIcal });
+await handle(io, A(BK_REQ.replace("7월 11일", "7월 10일")));
+r = await handle(io, A(BK_DONE));
+assert.equal(r.action, "stop", r.note);
+assert.equal(io.db.bookings.daol[0].checkOut, "2027-07-12");
+
+// 새 날짜가 다른 예약과 겹치면 멈춘다
+io = fakeIo({ bookings: { daol: [bkBooking(), { checkIn: "2027-07-12", checkOut: "2027-07-15", bookNumber: "5000000009", guestName: "X" }] },
+  ical: { daol: [{ checkIn: "2027-06-28", checkOut: "2027-07-13", code: "HMZ2SF8XSD" }] } });
+r = await handle(io, A(BK_DONE));
+assert.equal(r.action, "stop", r.note);
+
+// 그날 다른 예약도 퇴실하면 옛 청소는 남기고 새 날짜에 청소를 만든다
+io = fakeIo({ bookings: { "arangjae-ara": [{ ...bkBooking() }, { checkIn: "2027-07-10", checkOut: "2027-07-12", bookNumber: "5000000010", guestName: "Y" }] },
+  cleaning: { "arangjae-ara": { "2027-07-12": { auto: true, cleaner: "" } } }, ical: { "arangjae-ara": bkIcal.daol } });
+// (겹침 검사 때문에 실제로는 같은 숙소에 있을 수 없는 구성 — 청소 규칙만 보려고 날짜를 비켜 둔다)
+io.db.bookings["arangjae-ara"][1].checkIn = "2027-07-11";
+r = await handle(io, A(BK_DONE));
+assert.equal(r.action, "changed", r.note);
+assert.ok(io.db.cleaning["arangjae-ara"]["2027-07-12"] && io.db.cleaning["arangjae-ara"]["2027-07-11"]);
+
+// 앱에 그 이름이 없으면 ⚠️
+io = fakeIo({ ical: bkIcal });
+r = await handle(io, A(BK_DONE));
+assert.equal(r.action, "stop");
 
 console.log("모든 테스트 통과");

@@ -122,7 +122,21 @@ export function parseAirbnb({ title, text }) {
     };
   }
 
-  // "Pan 님이 예약을 취소했습니다" // "취소된 예약은 2026년 8월 31일 ~ 9월 4일에 예정된 강남역/…/각방 에어컨 총 5대 리스팅에 대한 것으로, …"
+  // 변경: "변경 요청" // "Baekyung님이 에어비앤비 예약의 숙박 기간을 2027년 6월 28일 - 2027년 7월 11일로 변경하고 싶어 합니다."
+  //       "예약 변경 완료" // "Baekyung님의 예약이 변경되었습니다."
+  // 요청은 대조용으로 저장만 하고, 완료가 와야 반영한다(호스트가 거절할 수 있다). 새 날짜의 근거는 iCal이다.
+  if (/^변경 요청/.test(title)) {
+    const m = text.match(/^(.+?)님이 .*?(\d{4})년\s*(\d+)월\s*(\d+)일\s*[-~]\s*(\d{4})년\s*(\d+)월\s*(\d+)일/);
+    if (!m) return { kind: "ignore", reason: "변경 요청의 이름이나 날짜를 못 읽음" };
+    return { kind: "airbnb-change-request", guestName: m[1].trim(), checkIn: ymd(m[2], m[3], m[4]), checkOut: ymd(m[5], m[6], m[7]) };
+  }
+  if (/^예약 변경 완료/.test(title)) {
+    const m = text.match(/^(.+?)님의 예약이 변경되었습니다/);
+    if (!m) return { kind: "ignore", reason: "변경 완료 알림의 이름을 못 읽음" };
+    return { kind: "airbnb-change-done", guestName: m[1].trim() };
+  }
+
+  // "Pan 님이 예약을 취소했습니다" //"취소된 예약은 2026년 8월 31일 ~ 9월 4일에 예정된 강남역/…/각방 에어컨 총 5대 리스팅에 대한 것으로, …"
   // 예약코드가 없다 — 이름·날짜·리스팅으로 앱의 예약을 찾고, 그 예약의 코드가 iCal에서 사라졌는지로 확인한다.
   const cancel = title.match(/^(.+?)\s*님이 예약을 취소했습니다/);
   if (cancel) {
@@ -324,6 +338,73 @@ async function handleAirbnbCancel(io, p) {
   return cancelBooking(io, p.bookNumber);
 }
 
+// 에어비앤비 변경 요청: 반영하지 않고 새 날짜만 저장해 둔다(완료 알림 때 iCal과 맞춰 본다).
+const changeKey = (name) => `chg_${(name || "").replace(/\s+/g, "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "")}`;
+
+async function handleChangeRequest(io, p) {
+  await io.putInbox(changeKey(p.guestName), { guestName: p.guestName, checkIn: p.checkIn, checkOut: p.checkOut });
+  return { ok: true, action: "wait", note: `${p.guestName} 변경 요청(${p.checkIn}~${p.checkOut}) — 변경 완료 알림을 기다림` };
+}
+
+// 에어비앤비 변경 완료: 이름이 같은 미래 에어비앤비 예약 중, iCal 날짜가 앱 날짜와 달라진 것이 딱 하나면 반영한다.
+// 예약 날짜만 고치고(updateMask), 청소를 새 퇴실일로 옮긴다. 담당자가 있으면 담당자째 옮기고 알린다.
+async function handleChangeDone(io, p) {
+  const today = io.today();
+  const req = await io.getInbox(changeKey(p.guestName));
+  const cands = [];
+  for (const prop of PROPS) {
+    const list = await io.listBookings(prop);
+    for (const b of list) {
+      if (/^HM/.test(b.bookNumber || "") && b.checkOut >= today && sameName(b.guestName, p.guestName)) cands.push({ prop, b });
+    }
+  }
+  if (!cands.length) return { ok: false, action: "stop", note: `${p.guestName} 예약 변경 완료 — 앱에서 이 이름의 에어비앤비 예약을 못 찾음` };
+
+  const changed = [];
+  for (const c of cands) {
+    const e = (await io.ical(c.prop)).find((x) => x.code === c.b.bookNumber);
+    if (e && (e.checkIn !== c.b.checkIn || e.checkOut !== c.b.checkOut)) changed.push({ ...c, checkIn: e.checkIn, checkOut: e.checkOut });
+  }
+  if (!changed.length) {
+    return { ok: true, action: "skip", note: `${p.guestName} 예약 변경 완료 — iCal 날짜가 이미 앱과 같음 (${cands.map((c) => c.b.bookNumber).join(", ")})` };
+  }
+  if (changed.length > 1) {
+    return { ok: false, action: "stop", note: `${p.guestName} 예약 변경 완료 — 날짜가 바뀐 예약이 ${changed.length}건, 수동 확인 (${changed.map((c) => c.b.bookNumber).join(", ")})` };
+  }
+
+  const { prop, b, checkIn, checkOut } = changed[0];
+  const where = `${PROP_LABEL[prop]} ${b.guestName} (${b.bookNumber})`;
+  if (req && req.checkIn && (req.checkIn !== checkIn || req.checkOut !== checkOut)) {
+    return { ok: false, action: "stop", note: `${where} 변경 요청은 ${req.checkIn}~${req.checkOut}인데 iCal은 ${checkIn}~${checkOut} — 확인 필요` };
+  }
+  const list = await io.listBookings(prop);
+  const clash = overlaps(list.filter((x) => x !== b), checkIn, checkOut);
+  if (clash.length) {
+    return { ok: false, action: "stop", note: `${where} 새 날짜 ${checkIn}~${checkOut}이 기존 예약과 겹침: ` + clash.map((x) => `${x.guestName} ${x.checkIn}~${x.checkOut}`).join(", ") };
+  }
+
+  // 청소: 퇴실일이 바뀌었을 때만 옮긴다
+  let moveFrom = null, createNew = false, cleanerNote = "";
+  if (checkOut !== b.checkOut) {
+    const oldC = await io.getCleaning(prop, b.checkOut);
+    const othersOld = list.filter((x) => x !== b && x.checkOut === b.checkOut);
+    const newExists = await io.cleaningExists(prop, checkOut);
+    if (oldC && oldC.auto === true && othersOld.length === 0) moveFrom = oldC;
+    createNew = !newExists;
+    if (moveFrom && moveFrom.cleaner) cleanerNote = ` — 담당 ${moveFrom.cleaner}님께 날짜 변경 알려 주세요`;
+  }
+  const oldIn = b.checkIn, oldOut = b.checkOut;
+  await io.commitChange(prop, b, { checkIn, checkOut }, moveFrom, createNew);
+  if (req) await io.putInbox(changeKey(p.guestName), { ...req, done: true });
+
+  let note = `${where} ${oldIn}~${oldOut} → ${checkIn}~${checkOut} 변경`;
+  if (checkOut !== oldOut) {
+    note += moveFrom ? ` · 청소 ${oldOut} → ${checkOut} 이동${createNew ? "" : "(새 날짜 청소는 이미 있어 기존 것 삭제만)"}${cleanerNote}`
+      : createNew ? ` · ${checkOut} 청소 추가 (${oldOut} 청소는 남김)` : "";
+  }
+  return { ok: true, action: "changed", note };
+}
+
 export async function handle(io, input) {
   const p = parse(input);
   switch (p.kind) {
@@ -332,6 +413,8 @@ export async function handle(io, input) {
     case "airbnb-notice":
     case "airbnb-reply": return { parsed: p, ...(await handleAirbnbPiece(io, p)) };
     case "airbnb-cancel": return { parsed: p, ...(await handleAirbnbCancel(io, p)) };
+    case "airbnb-change-request": return { parsed: p, ...(await handleChangeRequest(io, p)) };
+    case "airbnb-change-done": return { parsed: p, ...(await handleChangeDone(io, p)) };
     default: return { parsed: p, ok: true, action: "ignore", note: p.reason || "처리 대상 아님" };
   }
 }
