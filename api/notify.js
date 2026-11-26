@@ -55,7 +55,13 @@ function makeIo(key) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ writes }),
     });
-    if (!r.ok) throw new Error(`Firestore commit: ${r.status} ${await r.text()}`);
+    if (!r.ok) {
+      const text = await r.text();
+      const err = new Error(`Firestore commit: ${r.status} ${text}`);
+      // "이미 있으면 실패" 조건에 걸림 — 다른 쪽(동기화·메일·알림)이 먼저 썼다
+      err.conflict = /ALREADY_EXISTS|FAILED_PRECONDITION/.test(text);
+      throw err;
+    }
   };
   const cache = new Map();
 
@@ -76,17 +82,30 @@ function makeIo(key) {
     },
     getCleaning: (prop, date) => get(`cleaning-${prop}/${date}`),
     async cleaningExists(prop, date) { return !!(await get(`cleaning-${prop}/${date}`)); },
+    // 새 예약 문서 이름은 예약번호로 정한다(bn-예약번호). 동기화도 같은 이름을 쓰므로,
+    // 동기화와 알림·메일이 같은 예약을 동시에 넣어도 "이미 있으면 실패" 조건으로 1건만 남는다.
+    // 반환: "ok" | "exists"(그 예약이 이미 있음)
     async commitAdd(prop, doc, withCleaning) {
-      const writes = [{
-        update: { name: `${DOCS}/bookings-${prop}/${genId()}`, fields: toFields(doc) },
+      const id = doc.bookNumber ? `bn-${doc.bookNumber}` : genId();
+      const bookingWrite = {
+        update: { name: `${DOCS}/bookings-${prop}/${id}`, fields: toFields(doc) },
         currentDocument: { exists: false },
-      }];
-      if (withCleaning) writes.push({
+      };
+      const cleaningWrite = {
         update: { name: `${DOCS}/cleaning-${prop}/${doc.checkOut}`, fields: toFields({ status: "scheduled", auto: true, cleaner: "", memo: "" }) },
         currentDocument: { exists: false },
-      });
-      await commit(writes);
+      };
       cache.delete(prop);
+      try {
+        await commit(withCleaning ? [bookingWrite, cleaningWrite] : [bookingWrite]);
+        return "ok";
+      } catch (e) {
+        if (!e.conflict) throw e;
+        if (await get(`bookings-${prop}/${id}`)) return "exists";
+        if (!withCleaning) throw e;
+        await commit([bookingWrite]); // 그사이 청소가 먼저 생긴 경우 — 예약만 넣는다
+        return "ok";
+      }
     },
     async commitDelete(prop, booking, cleaning) {
       const writes = [{ delete: booking._name, currentDocument: { updateTime: booking._updateTime } }];

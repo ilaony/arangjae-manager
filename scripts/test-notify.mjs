@@ -11,6 +11,7 @@ function fakeIo({ bookings = {}, cleaning = {}, ical = {} }) {
     getCleaning: async (p, d) => db.cleaning[p][d] || null,
     cleaningExists: async (p, d) => !!db.cleaning[p][d],
     commitAdd: async (p, doc, withCleaning) => {
+      if (db.raceAdd) { db.bookings[p] = [...db.bookings[p], { ...doc }]; db.raceAdd = false; return "exists"; }
       db.bookings[p] = [...db.bookings[p], doc];
       if (withCleaning) db.cleaning[p][doc.checkOut] = { status: "scheduled", auto: true, cleaner: "", memo: "" };
     },
@@ -393,5 +394,13 @@ assert.deepEqual([p.kind, p.bookNumber], ["booking-cancel", "6266685684"]);
 assert.equal(parseMail(M("noreply@booking.com", "Booking.com - 신규 예약 안내! (6053392731, 2027년 3월 15일 월요일)", "")).kind, "ignore");
 assert.equal(parseMail(M("noreply@booking.com", "Booking.com - 변경된 예약 안내! (5201172428, 2026년 11월 25일 수요일)", "")).kind, "ignore");
 assert.equal(parseMail(M("express@airbnb.com", "RE: [마루] 예약(11월 21일~23일)", "안녕하세요")).kind, "ignore");
+
+
+// ── 동시 추가: 목록을 읽은 뒤 쓰기 전에 다른 경로(동기화)가 같은 예약을 넣은 경우 ──
+io = fakeIo({});
+io.db.raceAdd = true;
+r = await handle(io, B("신규 예약: 2027년 9월 1일 (수)부터 2박 //#5000000099 1 x 2층 아라<br> 총 요금: KRW 1"));
+assert.equal(r.action, "skip", r.note);
+assert.equal(io.db.bookings["arangjae-ara"].length, 1);
 
 console.log("모든 테스트 통과");

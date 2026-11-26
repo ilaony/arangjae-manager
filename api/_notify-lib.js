@@ -205,7 +205,9 @@ async function addBooking(io, prop, doc) {
     };
   }
   const cleaningExists = await io.cleaningExists(prop, doc.checkOut);
-  await io.commitAdd(prop, doc, !cleaningExists);
+  if ((await io.commitAdd(prop, doc, !cleaningExists)) === "exists") {
+    return { ok: true, action: "skip", note: `이미 앱에 있음 (${doc.bookNumber}) — 다른 경로가 방금 넣음` };
+  }
   return {
     ok: true, action: "added",
     note: `${PROP_LABEL[prop]} ${doc.checkIn}~${doc.checkOut} ${doc.guestName} 추가 (${doc.bookNumber})` +
