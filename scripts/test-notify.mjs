@@ -26,6 +26,7 @@ function fakeIo({ bookings = {}, cleaning = {}, ical = {} }) {
     },
     today: () => "2026-11-26",
     getInbox: async (k) => db.inbox[k] || null,
+    listInbox: async (prefix) => Object.entries(db.inbox).filter(([k]) => k.startsWith(prefix)).map(([, v]) => v),
     putInbox: async (k, o) => { db.inbox[k] = o; },
     wasCancelled: async (n) => !!db.log[n],
     markCancelled: async (n) => { db.log[n] = true; },
@@ -274,5 +275,35 @@ assert.ok(io.db.cleaning["arangjae-ara"]["2027-07-12"] && io.db.cleaning["arangj
 io = fakeIo({ ical: bkIcal });
 r = await handle(io, A(BK_DONE));
 assert.equal(r.action, "stop");
+
+
+// ── 보류된 취소 (실제 사례: David 9:41 취소 알림 → iCal에 아직 있음 → 11:51 倩雯 같은 날짜 신규) ──
+const DAVID_CANCEL = "David 님이 예약을 취소했습니다//취소된 예약은 2026년 12월 31일 ~ 2027년 1월 2일에 예정된 [마루]신축 엘리베이터/독립 욕실2개/명동/광장시장/넓은 가족실/짐보관가능 리스팅에 대한 것으로, 해당 날짜에 새로운 예약을 받으실 수 있도록 달력에도 반영되었습니다.";
+const QW_NOTICE = "倩雯님이 예약하셨습니다.//倩雯님이 2026년 12월 31일 ~ 2027년 1월 3일에 호스트님의 숙소를 예약했습니다.";
+const davidB = { checkIn: "2026-12-31", checkOut: "2027-01-02", bookNumber: "HMD99SXCZT", guestName: "David", channel: "airbnb" };
+const maruIcal = { "arangjae-maru": [{ checkIn: "2026-12-31", checkOut: "2027-01-02", code: "HMD99SXCZT" }] };
+io = fakeIo({ bookings: { "arangjae-maru": [davidB] }, cleaning: { "arangjae-maru": { "2027-01-02": { auto: true, cleaner: "" } } }, ical: maruIcal });
+r = await handle(io, A(DAVID_CANCEL));
+assert.equal(r.action, "stop"); // iCal에 아직 있어서 보류
+assert.equal(io.db.bookings["arangjae-maru"].length, 1);
+assert.ok(io.db.inbox.cancel_HMD99SXCZT);
+// 그사이 iCal이 갱신됨: David 빠지고 倩雯 생김
+io.ical = async (pp) => (pp === "arangjae-maru" ? [{ checkIn: "2026-12-31", checkOut: "2027-01-03", code: "HMMB3KZKHQ" }] : []);
+r = await handle(io, A(QW_NOTICE));
+assert.equal(r.action, "added", r.note);
+assert.match(r.note, /보류했던 취소 처리/);
+assert.deepEqual(io.db.bookings["arangjae-maru"].map((b) => b.bookNumber), ["HMMB3KZKHQ"]);
+assert.ok(!io.db.cleaning["arangjae-maru"]["2027-01-02"] && io.db.cleaning["arangjae-maru"]["2027-01-03"]);
+assert.ok(io.db.inbox.cancel_HMD99SXCZT.done);
+
+// 관계없는 알림(게스트 메시지)이 와도 보류된 취소를 처리하고 🗑로 알린다
+io = fakeIo({ bookings: { "arangjae-maru": [{ ...davidB }] }, ical: maruIcal });
+await handle(io, A(DAVID_CANCEL));
+io.ical = async () => [];
+r = await handle(io, A("11월 21일~23일 • [마루]신축: 娇//감사합니다"));
+assert.equal(r.action, "deleted", r.note);
+assert.equal(io.db.bookings["arangjae-maru"].length, 0);
+r = await handle(io, A("11월 21일~23일 • [마루]신축: 娇//감사합니다"));
+assert.equal(r.action, "ignore"); // 한 번만 처리
 
 console.log("모든 테스트 통과");

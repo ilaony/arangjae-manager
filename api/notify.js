@@ -114,6 +114,18 @@ function makeIo(key) {
     // 한국 시간 기준 오늘
     today: () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10),
     getInbox: (k) => get(`notify-inbox/${k}`),
+    async listInbox(prefix) {
+      const out = [];
+      let token = "";
+      do {
+        const r = await fetch(`${BASE}/notify-inbox?${q}&pageSize=300${token ? `&pageToken=${token}` : ""}`);
+        if (!r.ok) throw new Error(`Firestore list notify-inbox: ${r.status}`);
+        const j = await r.json();
+        for (const d of j.documents || []) if (d.name.split("/").pop().startsWith(prefix)) out.push(fromDoc(d));
+        token = j.nextPageToken || "";
+      } while (token);
+      return out;
+    },
     putInbox: (k, obj) => put(`notify-inbox/${k}`, { ...stripMeta(obj), updatedAt: new Date().toISOString() }),
     async wasCancelled(bookNumber) { return !!(await get(`notify-log/${bookNumber}`)); },
     markCancelled: (bookNumber) => put(`notify-log/${bookNumber}`, { cancelledAt: new Date().toISOString() }),

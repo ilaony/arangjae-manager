@@ -333,7 +333,11 @@ async function handleAirbnbCancel(io, p) {
   if (!p.bookNumber) return { ok: false, action: "stop", note: `에어비앤비 취소 알림에서 예약코드를 못 찾음 — 문구: ${p.raw.slice(0, 120)}` };
   for (const prop of PROPS) {
     const events = await io.ical(prop);
-    if (events.some((e) => e.code === p.bookNumber)) return { ok: false, action: "stop", note: `${p.bookNumber}가 아직 iCal에 있음 — 지우지 않음` };
+    if (events.some((e) => e.code === p.bookNumber)) {
+      // 취소 알림이 iCal 반영보다 먼저 온 경우(2026-11-26 David). 기록해 두고, 다음 알림 때 다시 본다.
+      await io.putInbox(`cancel_${p.bookNumber}`, { code: p.bookNumber, guestName: p.guestName || "", checkIn: p.checkIn || "", checkOut: p.checkOut || "" });
+      return { ok: false, action: "stop", note: `${p.bookNumber}가 아직 iCal에 있음 — 지금은 지우지 않고, iCal에서 빠지면 다음 알림 때 지움` };
+    }
   }
   return cancelBooking(io, p.bookNumber);
 }
@@ -405,7 +409,30 @@ async function handleChangeDone(io, p) {
   return { ok: true, action: "changed", note };
 }
 
+// 보류된 에어비앤비 취소를 다시 본다: 코드가 iCal에서 빠졌으면 이제 지운다. 모든 알림마다 돈다.
+async function sweepPendingCancels(io) {
+  const notes = [];
+  const pending = (await io.listInbox("cancel_")).filter((x) => !x.done);
+  for (const c of pending) {
+    let still = false;
+    for (const prop of PROPS) if ((await io.ical(prop)).some((e) => e.code === c.code)) still = true;
+    if (still) continue;
+    const r = await cancelBooking(io, c.code);
+    await io.putInbox(`cancel_${c.code}`, { ...c, done: true });
+    if (r.action === "deleted") notes.push(`보류했던 취소 처리: ${r.note}`);
+  }
+  return notes;
+}
+
 export async function handle(io, input) {
+  const swept = io.listInbox ? await sweepPendingCancels(io) : [];
+  const r = await handleOne(io, input);
+  if (!swept.length) return r;
+  const quiet = ["ignore", "skip", "wait"].includes(r.action);
+  return { ...r, action: quiet ? "deleted" : r.action, note: [...swept, ...(quiet ? [] : [r.note])].join(" / ") };
+}
+
+async function handleOne(io, input) {
   const p = parse(input);
   switch (p.kind) {
     case "booking-new": return { parsed: p, ...(await handleBookingNew(io, p)) };
