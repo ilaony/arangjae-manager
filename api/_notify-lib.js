@@ -1,7 +1,11 @@
 // 알림(MacroDroid → POST /api/notify) 해석과 반영 규칙.
 // 입출력(Firestore·iCal·텔레그램)은 io 객체로 주입한다 — 로컬 테스트에서 가짜로 바꿔 끼운다.
 
+import { NATIONALITIES } from "../src/nationalities.js";
+
 export const PROPS = ["arangjae-ara", "arangjae-maru", "daol"];
+// 에어비앤비 리스팅 번호 → 앱 컬렉션 (메일 본문의 "리스팅 번호 #…")
+const LISTING_ID = { "1649288534400052206": "arangjae-ara", "1649530929908799202": "arangjae-maru", "979425845780379545": "daol" };
 export const PROP_LABEL = { "arangjae-ara": "아라", "arangjae-maru": "마루", daol: "다올" };
 
 // 알림으로 들어간 예약의 표시. 동기화(/아랑재동기화)가 이 표시를 보고 이름·인원·국적을 채운다.
@@ -409,6 +413,98 @@ async function handleChangeDone(io, p) {
   return { ok: true, action: "changed", note };
 }
 
+// ── 메일 (Google Apps Script가 5분마다 Gmail에서 찾아 보낸다) ──────────────
+
+const COUNTRY_ALIAS = { "오스트레일리아": "호주", "대한민국": "한국", "터키": "튀르키예" };
+// "중국", "베이징, 중국" → 앱 국적 값. 목록 밖이면 null
+export function toNationality(raw) {
+  const last = String(raw || "").split(",").pop().trim();
+  const v = COUNTRY_ALIAS[last] || last;
+  return NATIONALITIES.includes(v) ? v : null;
+}
+
+// 처리 대상: 에어비앤비 예약 확정·취소됨·예약 변경 완료, 부킹닷컴 취소된 예약 안내
+export function parseMail({ from, subject, body }) {
+  const f = String(from || "").toLowerCase();
+  const subj = String(subject || "").trim();
+  const text = String(body || "").replace(/\r/g, "");
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  if (f.includes("booking.com")) {
+    const c = subj.match(/취소된 예약 안내!\s*\((\d{10}),/);
+    if (c) return { kind: "booking-cancel", bookNumber: c[1], guestName: "", rooms: [] };
+    return { kind: "ignore", reason: "부킹닷컴 메일 — 취소 외에는 처리하지 않음" };
+  }
+  if (!f.includes("airbnb")) return { kind: "ignore", reason: "에어비앤비·부킹닷컴 메일이 아님" };
+
+  // "취소됨: 12월 31일 ~ 1월 2일 예약 건(HMD99SXCZT)"
+  const cancel = subj.match(/^취소됨:.*\((HM[A-Z0-9]{8})\)/);
+  if (cancel) {
+    const name = (text.match(/게스트\s+(.+?)\s*님이\s*\d{4}년/) || [])[1] || "";
+    return { kind: "airbnb-cancel", bookNumber: cancel[1], guestName: name.trim(), raw: subj };
+  }
+  // "예약 변경 완료 - Baekyung 님의 예약이 변경되었습니다."
+  const changed = subj.match(/^예약 변경 완료\s*-\s*(.+?)\s*님의 예약이 변경/);
+  if (changed) return { kind: "airbnb-change-done", guestName: changed[1].trim() };
+
+  // "예약 확정 - 嫦嫦 魏 님이 11월 27일에 체크인할 예정입니다"
+  const confirm = subj.match(/^예약 확정\s*-\s*(.+?)\s*님이\s*(\d+)월\s*(\d+)일/);
+  if (confirm) {
+    const code = (text.match(/예약\s*코드\s*(HM[A-Z0-9]{8})/) || text.match(/\b(HM[A-Z0-9]{8})\b/) || [])[1];
+    const head = lines.slice(0, 30);
+    const listingLine = head.find((l) => propFromName(l)) || "";
+    const countryLine = head.find((l) => l.length <= 30 && toNationality(l)) || "";
+    const ci = text.match(/체크인\s*(\d+)월\s*(\d+)일/);
+    const co = text.match(/체크아웃\s*(\d+)월\s*(\d+)일/);
+    const n = (re) => Number((text.match(re) || [])[1] || 0);
+    const guests = n(/성인\s*(\d+)명/) + n(/어린이\s*(\d+)명/) + n(/유아\s*(\d+)명/);
+    return {
+      kind: "airbnb-mail-new", bookNumber: code || null, guestName: confirm[1].trim(),
+      nationality: toNationality(countryLine), listing: listingLine, prop: propFromName(listingLine),
+      md: ci && co ? { m1: +ci[1], d1: +ci[2], m2: +co[1], d2: +co[2] } : null, guests,
+    };
+  }
+  return { kind: "ignore", reason: "처리 대상 에어비앤비 메일이 아님" };
+}
+
+// 에어비앤비 확정 메일: 코드로 iCal에서 날짜(연도 포함)를 확인하고 등록한다.
+// 이미 알림으로 들어와 있으면 빈칸(이름·인원·국적)만 채운다. iCal에 아직 없으면 보류해 두고 다음 알림 때 다시 본다.
+// 인원은 메일의 성인+어린이+유아 — 호스팅 목록의 일행 수와 다를 수 있어 메모 표시를 남겨 동기화가 확인한다.
+async function applyAirbnbMailNew(io, p, fromSweep) {
+  if (!p.bookNumber) return { ok: false, action: "stop", note: `에어비앤비 확정 메일(${p.guestName})에서 예약코드를 못 읽음` };
+  const props = p.prop ? [p.prop] : PROPS;
+  let hit = null;
+  for (const prop of props) {
+    const e = (await io.ical(prop)).find((x) => x.code === p.bookNumber);
+    if (e) { hit = { prop, ...e }; break; }
+  }
+  if (!hit) {
+    if (!fromSweep) await io.putInbox(`mailnew_${p.bookNumber}`, { code: p.bookNumber, payload: JSON.stringify(p) });
+    return { ok: true, action: "wait", note: `확정 메일 ${p.guestName} (${p.bookNumber}) — iCal에 아직 없어 보류` };
+  }
+  if (p.md && (Number(hit.checkIn.slice(5, 7)) !== p.md.m1 || Number(hit.checkIn.slice(8)) !== p.md.d1)) {
+    return { ok: false, action: "stop", note: `확정 메일 ${p.guestName} (${p.bookNumber}) 체크인 ${p.md.m1}/${p.md.d1}과 iCal ${hit.checkIn}이 다름 — 확인 필요` };
+  }
+
+  for (const prop of PROPS) {
+    const b = (await io.listBookings(prop)).find((x) => x.bookNumber === p.bookNumber);
+    if (!b) continue;
+    if (b.memo !== AUTO_MEMO) return { ok: true, action: "skip", note: `이미 앱에 있음 (${p.bookNumber})` };
+    const fields = {};
+    if (p.guestName && b.guestName !== p.guestName && sameName(b.guestName, p.guestName)) fields.guestName = p.guestName;
+    if (p.guests && b.guests !== p.guests) fields.guests = p.guests;
+    if (p.nationality && b.nationality === "기타") fields.nationality = p.nationality;
+    if (!Object.keys(fields).length) return { ok: true, action: "skip", note: `이미 앱에 있음 (${p.bookNumber})` };
+    await io.commitFill(prop, b, fields);
+    return { ok: true, action: "filled", note: `${PROP_LABEL[prop]} ${b.checkIn}~${b.checkOut} ${p.guestName} 빈칸 채움 (${Object.entries(fields).map(([k, v]) => `${k}=${v}`).join(", ")})` };
+  }
+
+  const doc = newBookingDoc({ checkIn: hit.checkIn, checkOut: hit.checkOut, channel: "airbnb", guestName: p.guestName, bookNumber: p.bookNumber });
+  if (p.guests) doc.guests = p.guests;
+  if (p.nationality) doc.nationality = p.nationality;
+  return addBooking(io, hit.prop, doc);
+}
+
 // 보류된 에어비앤비 취소를 다시 본다: 코드가 iCal에서 빠졌으면 이제 지운다. 모든 알림마다 돈다.
 async function sweepPendingCancels(io) {
   const notes = [];
@@ -419,7 +515,13 @@ async function sweepPendingCancels(io) {
     if (still) continue;
     const r = await cancelBooking(io, c.code);
     await io.putInbox(`cancel_${c.code}`, { ...c, done: true });
-    if (r.action === "deleted") notes.push(`보류했던 취소 처리: ${r.note}`);
+    if (r.action === "deleted") notes.push({ action: "deleted", note: `보류했던 취소 처리: ${r.note}` });
+  }
+  // 메일로 받았지만 iCal에 아직 없던 에어비앤비 신규
+  for (const m of (await io.listInbox("mailnew_")).filter((x) => !x.done)) {
+    const r = await applyAirbnbMailNew(io, JSON.parse(m.payload), true);
+    if (r.action !== "wait") await io.putInbox(`mailnew_${m.code}`, { ...m, done: true });
+    if (["added", "filled", "stop"].includes(r.action)) notes.push({ action: r.action, note: `보류했던 메일 예약: ${r.note}` });
   }
   return notes;
 }
@@ -429,11 +531,11 @@ export async function handle(io, input) {
   const r = await handleOne(io, input);
   if (!swept.length) return r;
   const quiet = ["ignore", "skip", "wait"].includes(r.action);
-  return { ...r, action: quiet ? "deleted" : r.action, note: [...swept, ...(quiet ? [] : [r.note])].join(" / ") };
+  return { ...r, action: quiet ? swept[0].action : r.action, note: [...swept.map((x) => x.note), ...(quiet ? [] : [r.note])].join(" / ") };
 }
 
 async function handleOne(io, input) {
-  const p = parse(input);
+  const p = input.source === "mail" ? parseMail(input) : parse(input);
   switch (p.kind) {
     case "booking-new": return { parsed: p, ...(await handleBookingNew(io, p)) };
     case "booking-cancel": return { parsed: p, ...(await handleBookingCancel(io, p)) };
@@ -442,6 +544,7 @@ async function handleOne(io, input) {
     case "airbnb-cancel": return { parsed: p, ...(await handleAirbnbCancel(io, p)) };
     case "airbnb-change-request": return { parsed: p, ...(await handleChangeRequest(io, p)) };
     case "airbnb-change-done": return { parsed: p, ...(await handleChangeDone(io, p)) };
+    case "airbnb-mail-new": return { parsed: p, ...(await applyAirbnbMailNew(io, p, false)) };
     default: return { parsed: p, ok: true, action: "ignore", note: p.reason || "처리 대상 아님" };
   }
 }

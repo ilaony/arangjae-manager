@@ -1,6 +1,6 @@
 // node scripts/test-notify.mjs — 텔레그램에 쌓인 실제 알림 문구로 api/_notify-lib.js 를 검증한다.
 import assert from "node:assert/strict";
-import { handle, parse, propFromName, AUTO_MEMO } from "../api/_notify-lib.js";
+import { handle, parse, propFromName, AUTO_MEMO, parseMail, toNationality } from "../api/_notify-lib.js";
 
 function fakeIo({ bookings = {}, cleaning = {}, ical = {} }) {
   const db = { bookings: structuredClone(bookings), cleaning: structuredClone(cleaning), inbox: {}, log: {} };
@@ -25,6 +25,7 @@ function fakeIo({ bookings = {}, cleaning = {}, ical = {} }) {
       if (createNew) db.cleaning[p][dates.checkOut] = moveFrom ? { ...moveFrom } : { status: "scheduled", auto: true, cleaner: "", memo: "" };
     },
     today: () => "2026-11-26",
+    commitFill: async (p, b, fields) => { Object.assign(b, fields); },
     getInbox: async (k) => db.inbox[k] || null,
     listInbox: async (prefix) => Object.entries(db.inbox).filter(([k]) => k.startsWith(prefix)).map(([, v]) => v),
     putInbox: async (k, o) => { db.inbox[k] = o; },
@@ -305,5 +306,92 @@ assert.equal(r.action, "deleted", r.note);
 assert.equal(io.db.bookings["arangjae-maru"].length, 0);
 r = await handle(io, A("11월 21일~23일 • [마루]신축: 娇//감사합니다"));
 assert.equal(r.action, "ignore"); // 한 번만 처리
+
+
+// ── 메일 (실제 본문) ──
+const M = (from, subject, body) => ({ source: "mail", from, subject, body });
+const CC_BODY = `새로운 예약이 확정되었습니다! 嫦嫦 님이 11월 27일에 체크인할 예정입니다
+嫦嫦 님에게 메시지를 보내 체크인 세부사항을 확인하거나 인사말을 전하세요.
+	
+嫦嫦 魏
+	
+본인 인증 완료 · 후기 1개
+	
+중국
+嫦嫦 님에게 메시지 보내기嫦嫦 님에게 메시지 보내기
+[Gangnam/3BR·2BA] 복층 독채 5베드｜교대·강남·고속터미널
+집 전체
+체크인
+11월 27일 (금)
+오후 5:00
+	
+체크아웃
+11월 29일 (일)
+오후 12:00
+게스트
+성인 4명
+동반 게스트 세부정보
+예약 코드
+HMSFFR9DDN
+	
+일정표 보기`;
+const CC = M("에어비앤비 <automated@airbnb.com>", "예약 확정 - 嫦嫦 魏 님이 11월 27일에 체크인할 예정입니다", CC_BODY);
+p = parseMail(CC);
+assert.deepEqual([p.kind, p.bookNumber, p.guestName, p.nationality, p.prop, p.guests], ["airbnb-mail-new", "HMSFFR9DDN", "嫦嫦 魏", "중국", "daol", 4]);
+assert.deepEqual(p.md, { m1: 11, d1: 27, m2: 11, d2: 29 });
+assert.equal(toNationality("베이징, 중국"), "중국");
+assert.equal(toNationality("오스트레일리아"), "호주");
+assert.equal(toNationality("모로코"), null);
+
+const ccIcal = { daol: [{ checkIn: "2026-11-27", checkOut: "2026-11-29", code: "HMSFFR9DDN" }] };
+// 알림이 빠졌을 때: 메일만으로 이름·인원·국적까지 넣어 등록
+io = fakeIo({ ical: ccIcal });
+r = await handle(io, CC);
+assert.equal(r.action, "added", r.note);
+let cc = io.db.bookings.daol[0];
+assert.deepEqual([cc.bookNumber, cc.guestName, cc.guests, cc.nationality, cc.checkIn, cc.memo], ["HMSFFR9DDN", "嫦嫦 魏", 4, "중국", "2026-11-27", AUTO_MEMO]);
+assert.equal((await handle(io, CC)).action, "skip"); // 같은 메일이 또 와도 그대로
+
+// 알림으로 먼저 들어와 있으면 빈칸만 채움
+io = fakeIo({ ical: ccIcal });
+await handle(io, A("嫦嫦님이 예약하셨습니다.//嫦嫦님이 2026년 11월 27일~29일에 호스트님의 숙소를 예약했습니다."));
+assert.equal(io.db.bookings.daol[0].guests, 0);
+r = await handle(io, CC);
+assert.equal(r.action, "filled", r.note);
+cc = io.db.bookings.daol[0];
+assert.deepEqual([cc.guestName, cc.guests, cc.nationality], ["嫦嫦 魏", 4, "중국"]);
+
+// 사람이 손본 예약(메모 없음)은 건드리지 않음
+io = fakeIo({ bookings: { daol: [{ checkIn: "2026-11-27", checkOut: "2026-11-29", bookNumber: "HMSFFR9DDN", guestName: "웨이", guests: 5, nationality: "기타", memo: "" }] }, ical: ccIcal });
+assert.equal((await handle(io, CC)).action, "skip");
+assert.equal(io.db.bookings.daol[0].guests, 5);
+
+// iCal에 아직 없으면 보류 → 다음 알림 때 등록
+io = fakeIo({ ical: {} });
+assert.equal((await handle(io, CC)).action, "wait");
+io.ical = async (pp) => ccIcal[pp] || [];
+r = await handle(io, A("11월 21일~23일 • [마루]신축: 娇//감사합니다"));
+assert.equal(r.action, "added", r.note);
+assert.match(r.note, /보류했던 메일 예약/);
+assert.equal(io.db.bookings.daol.length, 1);
+
+// 에어비앤비 취소 메일: 제목의 코드로 삭제 (iCal에서 빠졌을 때)
+const DAVID_MAIL = M("에어비앤비 <automated@airbnb.com>", "취소됨: 12월 31일 ~ 1월 2일 예약 건(HMD99SXCZT)",
+  "예약 취소 안내\n[마루]신축 엘리베이터/독립 욕실2개\n리스팅 번호 #1649530929908799202\n12월 31일 ~ 1월 2일, 게스트 1명\n게스트 David 님이 2026년 12월 31일 ~ 2027년 1월 2일 예약(HMD99SXCZT)을 취소했습니다.");
+p = parseMail(DAVID_MAIL);
+assert.deepEqual([p.kind, p.bookNumber, p.guestName], ["airbnb-cancel", "HMD99SXCZT", "David"]);
+io = fakeIo({ bookings: { "arangjae-maru": [{ ...davidB }] }, ical: {} });
+assert.equal((await handle(io, DAVID_MAIL)).action, "deleted");
+
+// 변경 완료 메일 → 알림과 같은 처리
+p = parseMail(M("에어비앤비 <automated@airbnb.com>", "예약 변경 완료 - Baekyung 님의 예약이 변경되었습니다.", "Baekyung. 오타와, 캐나다."));
+assert.deepEqual([p.kind, p.guestName], ["airbnb-change-done", "Baekyung"]);
+
+// 부킹닷컴: 취소만 처리, 신규·변경은 무시
+p = parseMail(M("Booking.com <noreply@booking.com>", "Booking.com - 취소된 예약 안내! (6266685684, 2026년 12월 16일 수요일)", ""));
+assert.deepEqual([p.kind, p.bookNumber], ["booking-cancel", "6266685684"]);
+assert.equal(parseMail(M("noreply@booking.com", "Booking.com - 신규 예약 안내! (6053392731, 2027년 3월 15일 월요일)", "")).kind, "ignore");
+assert.equal(parseMail(M("noreply@booking.com", "Booking.com - 변경된 예약 안내! (5201172428, 2026년 11월 25일 수요일)", "")).kind, "ignore");
+assert.equal(parseMail(M("express@airbnb.com", "RE: [마루] 예약(11월 21일~23일)", "안녕하세요")).kind, "ignore");
 
 console.log("모든 테스트 통과");

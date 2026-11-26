@@ -1,5 +1,6 @@
 // POST /api/notify — MacroDroid가 에어비앤비·부킹닷컴 알림을 보내는 곳.
-// 값 3개: secret, app("[앱 이름]"), message("[알림 제목]//[알림 내용]")
+// 휴대폰 알림(MacroDroid): secret, app("[앱 이름]"), message("[알림 제목]//[알림 내용]")
+// 메일(Google Apps Script, scripts/gmail-forwarder.gs): secret, source="mail", from, subject, body
 // 쿼리 파라미터(권장 — MacroDroid가 인코딩해 줌), 폼 본문, JSON 본문 어느 쪽으로 보내도 된다.
 //
 // Vercel 환경 변수:
@@ -113,6 +114,15 @@ function makeIo(key) {
     },
     // 한국 시간 기준 오늘
     today: () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10),
+    // 알림·메일로 들어온 예약의 빈칸(이름·인원·국적)만 채운다
+    async commitFill(prop, booking, fields) {
+      await commit([{
+        update: { name: booking._name, fields: toFields(fields) },
+        updateMask: { fieldPaths: Object.keys(fields) },
+        currentDocument: { updateTime: booking._updateTime },
+      }]);
+      cache.delete(prop);
+    },
     getInbox: (k) => get(`notify-inbox/${k}`),
     async listInbox(prefix) {
       const out = [];
@@ -153,7 +163,7 @@ async function tell(text) {
   }).catch(() => {});
 }
 
-const ICON = { added: "✅", deleted: "🗑", changed: "🔁", stop: "⚠️", error: "❌" };
+const ICON = { added: "✅", deleted: "🗑", changed: "🔁", filled: "📝", stop: "⚠️", error: "❌" };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST only" });
@@ -169,11 +179,15 @@ export default async function handler(req, res) {
   if (!process.env.FIREBASE_API_KEY) return res.status(500).json({ ok: false, error: "FIREBASE_API_KEY 없음" });
 
   try {
-    const result = await handle(makeIo(process.env.FIREBASE_API_KEY), { app: body.app, message: body.message });
-    if (ICON[result.action]) await tell(`${ICON[result.action]} [앱 반영] ${result.note}`);
+    const input = body.source === "mail"
+      ? { source: "mail", from: body.from, subject: body.subject, body: body.body }
+      : { app: body.app, message: body.message };
+    const result = await handle(makeIo(process.env.FIREBASE_API_KEY), input);
+    const tag = body.source === "mail" ? "[메일 반영]" : "[앱 반영]";
+    if (ICON[result.action]) await tell(`${ICON[result.action]} ${tag} ${result.note}`);
     return res.status(200).json(result);
   } catch (e) {
-    await tell(`${ICON.error} [앱 반영 실패] ${e.message}\n원문: ${String(body.message || "").slice(0, 200)}`);
+    await tell(`${ICON.error} [반영 실패] ${e.message}\n원문: ${String(body.message || body.subject || "").slice(0, 200)}`);
     return res.status(500).json({ ok: false, action: "error", note: e.message });
   }
 }

@@ -6,6 +6,7 @@ import {
   deleteBookingWithCleaning,
 } from "./useFirestore";
 import arangjaeLogo from "./assets/arangjae_logo.jpeg";
+import { NATIONALITIES } from "./nationalities.js";
 
 // ─── Constants ───
 const PROPERTIES = [
@@ -34,18 +35,6 @@ const CLEANING_STATUS = {
 
 // 목록에 없는 국가는 "기타"로 묻히고, 목록 밖의 값을 저장하면 편집 모달을 열 때
 // 조용히 바뀐다. 그래서 실제로 받는 국적은 빠짐없이 넣어둔다. 가까운 지역 순.
-const NATIONALITIES = [
-  "한국", "일본", "중국", "대만", "홍콩", "마카오",
-  "태국", "베트남", "싱가포르", "말레이시아", "인도네시아", "필리핀", "캄보디아",
-  "호주", "뉴질랜드",
-  "인도", "네팔", "스리랑카", "몽골", "카자흐스탄", "우즈베키스탄",
-  "미국", "캐나다", "멕시코", "브라질", "아르헨티나",
-  "영국", "아일랜드", "프랑스", "독일", "네덜란드", "벨기에", "스위스", "오스트리아", "포르투갈",
-  "이탈리아", "스페인", "그리스",
-  "스웨덴", "노르웨이", "덴마크", "핀란드", "폴란드", "체코", "러시아", "튀르키예",
-  "이스라엘", "아랍에미리트", "사우디아라비아", "남아프리카공화국",
-  "기타",
-];
 
 // ─── Helpers ───
 function getDaysInMonth(year, month) {
