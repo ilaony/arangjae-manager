@@ -629,16 +629,16 @@ function PropertyCalendar({
       laneMap[b.id] = lane;
     });
 
-    // Build segments: one per week-row per booking
+    // Build segments: one per week-row per booking.
+    // A bar runs from the afternoon of check-in to the morning of check-out,
+    // so it covers the check-out cell too and the end cells are drawn half-width.
     const monthStart = new Date(year, month, 1);
     const monthEnd = new Date(year, month, daysInMonth);
     bookings.forEach((b) => {
       const checkIn = parseDate(b.checkIn);
       const checkOut = parseDate(b.checkOut);
       const visStart = checkIn < monthStart ? monthStart : checkIn;
-      const lastDay = new Date(checkOut);
-      lastDay.setDate(lastDay.getDate() - 1);
-      const visEnd = lastDay > monthEnd ? monthEnd : lastDay;
+      const visEnd = checkOut > monthEnd ? monthEnd : checkOut;
       if (visStart > monthEnd || visEnd < monthStart) return;
 
       const startDay = visStart.getDate();
@@ -651,7 +651,7 @@ function PropertyCalendar({
         const remainBook = endDay - d + 1;
         const span = Math.min(remainWeek, remainBook);
         const isFirst = (d === startDay) && (checkIn >= monthStart);
-        const isLast = (d + span - 1 === endDay) && (lastDay <= monthEnd);
+        const isLast = (d + span - 1 === endDay) && (checkOut <= monthEnd);
 
         segments.push({
           booking: b,
@@ -776,6 +776,11 @@ function PropertyCalendar({
           const color = ch ? ch.color : "#94A3B8";
           const radiusL = seg.isFirst ? 6 : 0;
           const radiusR = seg.isLast ? 6 : 0;
+          // Half a day cell inside this segment's grid area (columns are 2px apart),
+          // plus 1px so a check-out and a same-day check-in don't touch.
+          const halfCell = `calc((100% - ${(seg.span - 1) * 2}px) / ${seg.span * 2} + 1px)`;
+          // A check-out stub alone on a row is too short for a name.
+          const showName = !(seg.span === 1 && seg.isLast && !seg.isFirst);
           return (
             <div
               key={`seg-${i}`}
@@ -785,6 +790,8 @@ function PropertyCalendar({
                 gridColumn: `${seg.startCol} / ${seg.startCol + seg.span}`,
                 alignSelf: "start",
                 marginTop: 22 + seg.lane * 18,
+                marginLeft: seg.isFirst ? halfCell : 0,
+                marginRight: seg.isLast ? halfCell : 0,
                 height: 16,
                 background: color,
                 borderRadius: `${radiusL}px ${radiusR}px ${radiusR}px ${radiusL}px`,
@@ -797,9 +804,11 @@ function PropertyCalendar({
               }}
               title={`${seg.booking.guestName} (${ch ? ch.name : ""})`}
             >
-              <span style={styles.bookingTagText}>
-                {seg.isFirst ? "▶ " : ""}{seg.booking.guestName}
-              </span>
+              {showName && (
+                <span style={styles.bookingTagText}>
+                  {seg.isFirst ? "▶ " : ""}{seg.booking.guestName}
+                </span>
+              )}
             </div>
           );
         })}
