@@ -1435,10 +1435,10 @@ const styles = {
   daysGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", padding: "4px 12px 16px", gap: 2 },
   emptyCell: { height: 64 },
   dayCell: {
-    height: 64, padding: "4px 4px 2px", borderRadius: 8,
+    height: 64, padding: "4px 4px 2px", borderRadius: 8, background: "#F1F5F9",
     position: "relative", transition: "background 0.15s", cursor: "default", overflow: "hidden",
   },
-  todayCell: { background: "#EFF6FF" },
+  todayCell: { background: "#BFDBFE" },
   dayNum: { fontSize: 13, fontWeight: 600, display: "inline-block", padding: "1px 4px" },
   todayNum: { background: "#2563EB", color: "#FFF", borderRadius: 6, padding: "1px 6px" },
   bookingTagText: {
