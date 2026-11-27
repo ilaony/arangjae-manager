@@ -680,7 +680,7 @@ function PropertyCalendar({
           {property.name}
           {tab === "booking" && (
             <span style={styles.occupancy}>
-              ({bookedNights}/{daysInMonth}, {occupancyPct}%)
+              {occupancyPct}% · 빈 날 {daysInMonth - bookedNights}
             </span>
           )}
         </h2>
