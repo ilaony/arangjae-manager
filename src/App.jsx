@@ -605,6 +605,13 @@ function PropertyCalendar({
     }
   });
 
+  // Occupancy: nights of this month that some booking covers
+  let bookedNights = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    if (bookingMap[toDateStr(year, month, d)]) bookedNights++;
+  }
+  const occupancyPct = Math.round((bookedNights / daysInMonth) * 100);
+
   const cleanMap = {};
   cleaningData.forEach((c) => { cleanMap[c.date] = c; });
 
@@ -669,7 +676,14 @@ function PropertyCalendar({
   return (
     <div style={{ ...styles.calendarCard, borderTop: `3px solid ${property.color}` }}>
       <div style={styles.calendarHeader}>
-        <h2 style={{ ...styles.calendarTitle, color: property.color }}>{property.name}</h2>
+        <h2 style={{ ...styles.calendarTitle, color: property.color }}>
+          {property.name}
+          {tab === "booking" && (
+            <span style={styles.occupancy}>
+              ({bookedNights}/{daysInMonth}, {occupancyPct}%)
+            </span>
+          )}
+        </h2>
         {tab === "booking" && (
           <button onClick={onAddBooking} style={{ ...styles.addBtn, background: property.color }}>
             + 예약 추가
@@ -1435,6 +1449,7 @@ const styles = {
     padding: "16px 20px 12px",
   },
   calendarTitle: { fontSize: 18, fontWeight: 800, margin: 0 },
+  occupancy: { fontSize: 13, fontWeight: 600, color: "#64748B", marginLeft: 6 },
   addBtn: {
     padding: "7px 16px", border: "none", borderRadius: 8,
     color: "#FFF", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
