@@ -812,7 +812,7 @@ function PropertyCalendar({
                 borderRadius: `${radiusL}px ${radiusR}px ${radiusR}px ${radiusL}px`,
                 cursor: "pointer",
                 overflow: "hidden",
-                padding: "0 4px",
+                padding: "0 4px 0 11px",
                 zIndex: 1,
                 display: "flex",
                 alignItems: "center",
