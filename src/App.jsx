@@ -821,7 +821,7 @@ function PropertyCalendar({
             >
               {showName && (
                 <span style={styles.bookingTagText}>
-                  {seg.isFirst ? "▶ " : ""}{seg.booking.guestName}
+                  {seg.booking.guestName}
                 </span>
               )}
             </div>
