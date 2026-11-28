@@ -788,8 +788,9 @@ function PropertyCalendar({
         {tab === "booking" && segments.map((seg, i) => {
           const ch = CHANNEL_MAP[seg.booking.channel];
           const color = ch ? ch.color : "#94A3B8";
-          const radiusL = seg.isFirst ? 6 : 0;
-          const radiusR = seg.isLast ? 6 : 0;
+          // Half the bar height, so the ends are semicircles
+          const radiusL = seg.isFirst ? 10 : 0;
+          const radiusR = seg.isLast ? 10 : 0;
           // Half a day cell inside this segment's grid area (columns are 2px apart),
           // plus 1px so a check-out and a same-day check-in don't touch.
           const halfCell = `calc((100% - ${(seg.span - 1) * 2}px) / ${seg.span * 2} + 1px)`;
